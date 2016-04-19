@@ -76,7 +76,7 @@ module TCPEchoP {
     }
     
     event bool Echo.accept(struct sockaddr_in6 *from, 
-        void **tx_buf, int *tx_buf_len) {
+        void **tx_buf, uint16_t *tx_buf_len) {
         
         *tx_buf = &tbf;
         *tx_buf_len = 256;

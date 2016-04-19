@@ -14,7 +14,7 @@ interface Ltcp {
    * the app should return FALSE to reject the connection attempt
    */
   event bool accept(struct sockaddr_in6 *from, 
-                    void **tx_buf, int *tx_buf_len);
+                    void **tx_buf, uint16_t *tx_buf_len);
 
   /*
    * Split-phase connect: connect to a remote endpoint.

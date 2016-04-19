@@ -31,7 +31,9 @@ typedef enum {
   TCP_LISTEN,
   TCP_SYN_RCVD,
   TCP_SYN_SENT,
-  TCP_ESTABLISHED,
+  TCP_ESTABLISHED_NOMINAL,
+  TCP_ESTABLISHED_ACKPENDING,
+  TCP_ESTABLISHED_PROCESSING,
   TCP_CLOSE_WAIT,
   TCP_LAST_ACK,
   TCP_FIN_WAIT_1,
@@ -40,32 +42,23 @@ typedef enum {
   TCP_TIME_WAIT,
 } tcplib_sock_state_t;
 
-/* internal processing state during established state */
-typedef enum {
-  TCP_NOMINAL = 0x0,
-  TCP_ACKPENDING = 0x1,
-  TCP_RXB_FULL = 0x2,
-  TCP_TXB_FULL = 0x4,
-} tcp_internal_state_t;
 
 /* le flaques */
 typedef enum {
-  TCP_FIN = 0x0,
-  TCP_SYN = 0x1,
-  TCP_RST = 0x2,
-  TCP_PSH = 0x4,
-  TCP_ACK = 0x8,
-  TCP_URG = 0x10,
-  TCP_ECE = 0x20,
-  TCP_CWR = 0x40,
-  TCP_NS  = 0x80,
+  TCP_FIN = 0x1,
+  TCP_SYN = 0x2,
+  TCP_RST = 0x4,
+  TCP_PSH = 0x8,
+  TCP_ACK = 0x10,
+  TCP_URG = 0x20,
+  TCP_ECE = 0x40,
+  TCP_CWR = 0x80,
+  TCP_NS  = 0x100,
 } tcp_flag_t;
 
 
 
 struct tcplib_sock {
-  /* internal processing state */
-  tcp_internal_state_t internal_state;
   
   //uint8_t flags;
   tcp_flag_t flags;
@@ -78,7 +71,7 @@ struct tcplib_sock {
   tcplib_sock_state_t state;
   
   void    *tx_buf;
-  int tx_buf_len;
+  uint16_t tx_buf_len;
   
   /* max segment size, or default if
    *   we didn't bother to pull it out

@@ -24,20 +24,34 @@
 #include <lib6lowpan/ip.h>
 #include <lib6lowpan/in_cksum.h>
 
-/* the period between to calls to the timer process in milliseconds*/
+/* the period between two calls to the timer process in milliseconds*/
 #ifndef TCP_PROCESS_TIME
-  #define TCP_PROCESS_TIME 1024
+  #define TCP_PROCESS_TIME 512
 #endif
 
 /* all ports below this one are reserved and will not be used on connect */
+#ifndef TCP_RESERVED_PORTS
+  #define TCP_RESERVED_PORTS 1024
+#endif
 
+/* start retry frequency (gets doubled on every retry) */
+#ifndef TCP_RETRY_FREQ
+  #define TCP_RETRY_FREQ 1000;
+#endif
 
+/* the standard time for TCP_TIME_WAIT in ms */
+#ifndef TCP_TIMEWAIT_TIME
+  #define TCP_TIMEWAIT_TIME 2000
+#endif
 
 /* number of retries before giving up */
 #ifndef TCP_N_RETRIES
   #define TCP_N_RETRIES 6
 #endif
 
+
+
+/* debug output */
 #ifdef DEBUG_OUT
   #include <printf.h>
   #define DBG(...) printf(__VA_ARGS__); printfflush()
@@ -114,6 +128,7 @@ module LtcpP {
     uint8_t i;
     struct tcp_hdr *tcp;
     struct tcplib_sock *sock;
+    void* payload_ptr;
     uint16_t payload_len;
     
     DBG("tcp packet received\n");
@@ -131,7 +146,7 @@ module LtcpP {
       if (i == uniqueCount("TCP_CLIENT")) {
         
         DBG("recv error: no open socket\n");
-        // TODO: reset on closed
+        // TODO: send rst without sock  on closed
         
         return;
       }
@@ -143,6 +158,7 @@ module LtcpP {
     }
     
     sock = &socks[i];
+    payload_ptr = tcp + sizeof(struct tcp_hdr) + (tcp->offset);
     payload_len = len - sizeof(struct tcp_hdr) - (tcp->offset/4);
     
     // TODO:check if socket is in condition to receive FIXME: needed???
@@ -162,34 +178,99 @@ module LtcpP {
         break;
         
       case TCP_LAST_ACK:
+        
+        if (tcp->flags & TCP_ACK) {
+          
+          DBG("connection fully closed\n");
+          sock->state = TCP_CLOSED;
+          signal Ltcp.closed[i](SUCCESS);
+          
+        }
+        
         break;
         
       case TCP_FIN_WAIT_1:
+        
+        if (tcp->flags & (TCP_FIN | TCP_ACK)) {
+          
+          // sending ack
+          if (call Ltcp.sendFlagged[i](NULL, 0 , (TCP_ACK)) != SUCCESS) {
+          DBG("error sending ACK on TCP_FIN_WAIT_1\n");
+          }
+          
+          DBG("going to TCP_CLOSING\n");
+          sock->state = TCP_CLOSING;
+          
+        }
+        else if (tcp->flags & TCP_FIN) {
+          
+          // sending ack
+          if (call Ltcp.sendFlagged[i](NULL, 0 , (TCP_ACK)) != SUCCESS) {
+          DBG("error sending ACK on TCP_FIN_WAIT_1\n");
+          }
+          
+          DBG("going to TCP_TIME_WAIT\n");
+          sock->state =TCP_TIME_WAIT;
+          
+        }
+        else if (tcp->flags & TCP_ACK) {
+          
+          DBG("going to TCP_FIN_WAIT_2\n");
+          sock->state = TCP_FIN_WAIT_2;
+        }
+        
         break;
         
       case TCP_FIN_WAIT_2:
+        
+        if (tcp->flags & TCP_FIN) {
+          
+          // sending ack
+          if (call Ltcp.sendFlagged[i](NULL, 0, (TCP_ACK)) != SUCCESS) {
+          DBG("error sending ACK on TCP_FIN_WAIT_2\n");
+          }
+          
+          DBG("going to TCP_TIME_WAIT\n");
+          sock->state = TCP_TIME_WAIT;
+          
+        }
+        
         break;
         
       case TCP_SYN_SENT:
         
         if (tcp->flags & (TCP_SYN | TCP_ACK) ) {
           
-          if (payload_len != 0) {
-            DBG("SYN contained data -> ignoring data\n");
+          if (call Ltcp.sendFlagged[i](NULL, 0, (TCP_ACK) ) != SUCCESS) {
+            DBG("error while sending ACK in handshake\n");
+            break;
           }
+          
+          signal Ltcp.connectDone[i](SUCCESS);
+          sock->state = TCP_ESTABLISHED_NOMINAL;          
+          break;
+        }
+        else if (tcp->flags & TCP_SYN) {
+          
+          DBG("synchronous handshake event\n");
           
           if (call Ltcp.sendFlagged[i](NULL, 0, (TCP_SYN | TCP_ACK) ) != SUCCESS) {
-            
-            DBG("error while sending ACK in handshake\n");
-            return;
+            DBG("error while sending SINACK in handshake\n");
+            break;
           }
           
-          sock->state = TCP_ESTABLISHED;
-          sock->internal_state = TCP_NOMINAL;
-          
-          return;
+          sock->state = TCP_SYN_RCVD;
+          break;
           
         }
+        else if (tcp->flags & TCP_RST) {
+          
+          DBG("received RST in SYN_SEND -> closing");
+          sock->state = TCP_CLOSED;
+          signal Ltcp.connectDone[i](FAIL);
+          break;
+        }
+        
         
         break;
         
@@ -197,54 +278,95 @@ module LtcpP {
         
         if (tcp->flags & (TCP_ACK) ) {
           
+          if (call Ltcp.sendFlagged[i](NULL, 0, (TCP_ACK) ) != SUCCESS) {
+              DBG("error while sending ACK in TCP_SYN_RCVD\n");
+              break;
+            }
+          DBG("connection complete\n");
+          sock->state = TCP_ESTABLISHED_NOMINAL;
+          
+          signal Ltcp.connectDone[i](SUCCESS);
+          
+          break;
+          
         }
         
         break;
         
       case TCP_LISTEN:
         
-        // is it syn packet
         if (tcp->flags & TCP_SYN) {
           
-          if (payload_len != 0) {
-            DBG("SYN contained data -> ignoring data\n");
-          }
+          // TODO: set r_ep in sock accordingly
+          // ask user, if connection should be accepted
+          if (signal Ltcp.accept[i](&(sock->r_ep), (sock->tx_buf), &(sock->tx_buf_len))) {
           
-          // set the ackno manually
-          sock->ackno = tcp->seqno;
-          
-          if (call Ltcp.sendFlagged[i](NULL, 0, (TCP_SYN | TCP_ACK) ) != SUCCESS) {
+            // set the ackno manually
+            sock->ackno = tcp->seqno;
             
-            DBG("error while sending SYNACK\n");
-            return;
+            if (call Ltcp.sendFlagged[i](NULL, 0, (TCP_SYN | TCP_ACK) ) != SUCCESS) {
+              DBG("error while sending SYNACK\n");
+              break;
+            }
+            
+            sock->state = TCP_SYN_RCVD;
+            break;
           }
-          
-          sock->state = TCP_SYN_RCVD;
-          return;
+          // else reset connection
+          else {
+            if (call Ltcp.sendFlagged[i](NULL, 0, (TCP_SYN | TCP_ACK) ) != SUCCESS) {
+              DBG("error while sending RST\n");
+              break;
+            }
+            // state stays TCP_LISTEN
+          }
           
         }
         else {
           
           if (call Ltcp.sendFlagged[i](NULL, 0, (TCP_RST) ) != SUCCESS) {
             
-            DBG("recvd packet on listen -> ignoring\n");
-            return;
+            DBG("recvd packet on listen -> send rst and ignore\n");
+            break;
           }
           
-          return;
+          break;
         }
         
         break;
+      
+      case TCP_CLOSING:
         
+        if (tcp->flags & TCP_ACK) {
+          
+          DBG("going to TCP_TIME_WAIT");
+          sock->state = TCP_TIME_WAIT;
+          break;
+          
+        }
+        
+        break;
+      
       case TCP_CLOSE_WAIT:
+        // ignore everything
         break;
         
       case TCP_TIME_WAIT:
+        // ignore everything
         break;
       
-      case TCP_ESTABLISHED:
+      
+      // normal usage
+      case TCP_ESTABLISHED_NOMINAL:
+        break;
+      
+      case TCP_ESTABLISHED_ACKPENDING:
         break;
         
+      case TCP_ESTABLISHED_PROCESSING:
+        break;
+      
+      
       default:
         DBG("something really bad has happened\n");
         break;
@@ -287,22 +409,45 @@ module LtcpP {
   /* connect the socket to a remote address */
   command error_t Ltcp.connect[uint8_t client](struct sockaddr_in6 *dest,
                                               void *tx_buf, int tx_buf_len) {
+    uint16_t i;
+    uint8_t j;
+    
+    uint8_t port_found = 0;
+    
     struct tcplib_sock *sock;
     sock = &socks[client];
     
     sock->tx_buf = tx_buf;
     sock->tx_buf_len = tx_buf_len;
     
+    // set socket remote endpoint options
+    memcpy(&(sock->l_ep), dest, sizeof(struct sockaddr_in6));
     
     switch (sock->state) {
     case TCP_CLOSED:
-      // connect socket without bind -- binds random free port TODO: implement it
-      return FAIL;
+    
+      // find a free port number greater than TCP_RESERVED_PORTS
+      for (i = TCP_RESERVED_PORTS; i < 65335U; i++) {
+        
+        if (call Ltcp.bind[client](i) == SUCCESS) {
+          break;
+        }
+        
+      }
+      
+      if (!port_found) {
+        
+        DBG("connect error: could not find free port");
+        return FAIL;
+      }
+      
+      break;
       
     case TCP_LISTEN:
       break;
     
     default:
+      DBG("connect fail: wrong socket state");
       return FAIL;
     }
     
@@ -311,8 +456,12 @@ module LtcpP {
     sock->seqno = call Random.rand16();
     
     sock->state = TCP_SYN_SENT;
-    sock->seqno++;
     sock->retx = 0;
+    // send syn
+    if (call Ltcp.sendFlagged[client](NULL, 0, (TCP_SYN)) != SUCCESS) {
+      DBG("fail to send SYN during CONNECT");
+      return FAIL;
+    }
     
     return SUCCESS;
   }
@@ -339,16 +488,10 @@ module LtcpP {
     sock = &socks[client];
     
     // check if socket is in correct state
-    if (sock->state != TCP_ESTABLISHED) {
+    if (sock->state != TCP_ESTABLISHED_NOMINAL) {
       DBG("send failed: connection was not established\n");
       return FAIL;
-    }
-    
-    // this tcp implementation only allows for one unacknowledged packet
-    if ( !(sock->internal_state & TCP_ACKPENDING) ) {
-      DBG("send failed: txb contained unprocessed data");
-      return FAIL;
-    }
+    }    
     
     // max segment size is set by the length of the provided tx_buf
     if ( len > (sock->tx_buf_len - sizeof(struct tcp_hdr))) {
@@ -405,8 +548,8 @@ module LtcpP {
     
     tcp->chksum = htons(msg_cksum(&pkt.ip6_hdr, &w, IANA_TCP));
     
-    // set socket into TCP_ACKPENDING
-    sock->internal_state |= TCP_ACKPENDING;
+    // set socket into ACKPENDING
+    sock->state = TCP_ESTABLISHED_ACKPENDING;
     
     // increment seqno
     sock->seqno += len;
@@ -416,7 +559,7 @@ module LtcpP {
   }
   
   
-  /* close connection and raise closed */
+  /* the TCP active close event*/
   command error_t Ltcp.close[uint8_t client]() {
     //if (!tcplib_close(&socks[client]))
     struct tcplib_sock *sock;
@@ -426,33 +569,37 @@ module LtcpP {
     
     switch (sock->state) {
       case TCP_CLOSE_WAIT:
-        sock->retx = 0;
-        sock->state = TCP_LAST_ACK;
         
-        if (call Ltcp.sendFlagged[client](NULL, 0 , (TCP_ACK | TCP_FIN)) != SUCCESS) {
+        if (call Ltcp.sendFlagged[client](NULL, 0 , (TCP_FIN)) != SUCCESS) {
           
-          DBG("error sending FINACK\n");
+          DBG("error sending FIN\n");
           return FAIL;
         }
+        
+        sock->retx = 0;
+        sock->state = TCP_LAST_ACK;
         
         return SUCCESS;
         break;
         
-      case TCP_ESTABLISHED:
+      case TCP_ESTABLISHED_NOMINAL:
+      case TCP_ESTABLISHED_ACKPENDING:
+      case TCP_ESTABLISHED_PROCESSING:
+        
+        if (call Ltcp.sendFlagged[client](NULL, 0 , (TCP_FIN)) != SUCCESS) {
+          
+          DBG("error sending FIN\n");
+          return FAIL;
+        }
         
         sock->retx = 0;
         sock->state = TCP_FIN_WAIT_1;
-        
-        if (call Ltcp.sendFlagged[client](NULL, 0 , (TCP_ACK | TCP_FIN)) != SUCCESS) {
-          
-          DBG("error sending FINACK\n");
-          return FAIL;
-        }
         
         return SUCCESS;
         break;
         
       case TCP_SYN_SENT:
+      case TCP_LISTEN:
         sock->state = TCP_CLOSED;
         return SUCCESS;
         break;
@@ -469,7 +616,6 @@ module LtcpP {
   command error_t Ltcp.abort[uint8_t client]() {
     switch (socks[client].state) {
       case TCP_CLOSED:
-      case TCP_LISTEN:
         break;
       default:
         memset(&(socks[client].l_ep), 0, sizeof(struct sockaddr_in6));
@@ -493,7 +639,7 @@ module LtcpP {
   
   /* ---------------- EVENTS ------------- */
   default event bool Ltcp.accept[uint8_t cid](struct sockaddr_in6 *from, 
-                                             void **tx_buf, int *tx_buf_len) {
+                                             void **tx_buf, uint16_t *tx_buf_len) {
     return FALSE;
   }
   
