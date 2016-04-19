@@ -1,6 +1,6 @@
 /* "Copyright (c) 2016 
  * Leon Tan 
- * University of Goettingen
+ * Georg-August University of Goettingen
  * All rights reserved"
  * 
  * Permission to use, copy, modify, and distribute this software and its
@@ -97,13 +97,10 @@ struct tcplib_sock {
   // and the index of the last byte we've ACKed
   uint32_t ackno;
   
-  //struct {
-  //  int8_t retx;
-  //} timer;
-  
+  // number of resends to an unacknowledged packet
   int8_t retx;
   
-  /* retransmission counter */
+  /* retransmission timer */
   uint16_t retxcnt;
   
   /* this needs to be at the end so

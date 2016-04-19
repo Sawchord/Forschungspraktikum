@@ -1,6 +1,6 @@
 /* "Copyright (c) 2016 
  * Leon Tan 
- * University of Goettingen
+ * Georg-August University of Goettingen
  * All rights reserved"
  * 
  * Permission to use, copy, modify, and distribute this software and its
@@ -24,10 +24,14 @@
 #include <lib6lowpan/ip.h>
 #include <lib6lowpan/in_cksum.h>
 
-/* the period between to calls to the process */
+/* the period between to calls to the timer process in milliseconds*/
 #ifndef TCP_PROCESS_TIME
-  #define TCP_PROCESS_TIME 512
+  #define TCP_PROCESS_TIME 1024
 #endif
+
+/* all ports below this one are reserved and will not be used on connect */
+
+
 
 /* number of retries before giving up */
 #ifndef TCP_N_RETRIES
@@ -93,6 +97,9 @@ module LtcpP {
   /* process time specific parts */
   event void Timer.fired() {
     /* TODO: process time spefic part */
+    
+    
+    
   }
   
   
@@ -104,8 +111,147 @@ module LtcpP {
                      void *payload, size_t len,
                      struct ip6_metadata *meta) {
     
+    uint8_t i;
+    struct tcp_hdr *tcp;
+    struct tcplib_sock *sock;
+    uint16_t payload_len;
+    
     DBG("tcp packet received\n");
-    /* TODO: process on receive */
+    
+    // check if packet is TCP, ignore if not
+    if (iph->ip6_nxt != IANA_TCP) {
+      DBG("was not TCP, ignored\n");
+      return;
+    }
+    
+    tcp = (struct tcp_hdr*) payload;
+    
+    // check, if addressed port is on a registered socket
+    for (i = 0; i <= uniqueCount("TCP_CLIENT"); i++) {
+      if (i == uniqueCount("TCP_CLIENT")) {
+        
+        DBG("recv error: no open socket\n");
+        // TODO: reset on closed
+        
+        return;
+      }
+      
+      if (socks[i].l_ep.sin6_port == tcp->srcport) {
+        break;
+      }
+      
+    }
+    
+    sock = &socks[i];
+    payload_len = len - sizeof(struct tcp_hdr) - (tcp->offset/4);
+    
+    // TODO:check if socket is in condition to receive FIXME: needed???
+    
+    
+    
+    switch (sock->state) {
+      case TCP_CLOSED:
+        
+        // closed connection dont like your presence
+        if (call Ltcp.sendFlagged[i](NULL, 0 , (TCP_RST)) != SUCCESS) {
+          
+          DBG("error sending RST on CLOSED\n");
+          return;
+        }
+        
+        break;
+        
+      case TCP_LAST_ACK:
+        break;
+        
+      case TCP_FIN_WAIT_1:
+        break;
+        
+      case TCP_FIN_WAIT_2:
+        break;
+        
+      case TCP_SYN_SENT:
+        
+        if (tcp->flags & (TCP_SYN | TCP_ACK) ) {
+          
+          if (payload_len != 0) {
+            DBG("SYN contained data -> ignoring data\n");
+          }
+          
+          if (call Ltcp.sendFlagged[i](NULL, 0, (TCP_SYN | TCP_ACK) ) != SUCCESS) {
+            
+            DBG("error while sending ACK in handshake\n");
+            return;
+          }
+          
+          sock->state = TCP_ESTABLISHED;
+          sock->internal_state = TCP_NOMINAL;
+          
+          return;
+          
+        }
+        
+        break;
+        
+      case TCP_SYN_RCVD:
+        
+        if (tcp->flags & (TCP_ACK) ) {
+          
+        }
+        
+        break;
+        
+      case TCP_LISTEN:
+        
+        // is it syn packet
+        if (tcp->flags & TCP_SYN) {
+          
+          if (payload_len != 0) {
+            DBG("SYN contained data -> ignoring data\n");
+          }
+          
+          // set the ackno manually
+          sock->ackno = tcp->seqno;
+          
+          if (call Ltcp.sendFlagged[i](NULL, 0, (TCP_SYN | TCP_ACK) ) != SUCCESS) {
+            
+            DBG("error while sending SYNACK\n");
+            return;
+          }
+          
+          sock->state = TCP_SYN_RCVD;
+          return;
+          
+        }
+        else {
+          
+          if (call Ltcp.sendFlagged[i](NULL, 0, (TCP_RST) ) != SUCCESS) {
+            
+            DBG("recvd packet on listen -> ignoring\n");
+            return;
+          }
+          
+          return;
+        }
+        
+        break;
+        
+      case TCP_CLOSE_WAIT:
+        break;
+        
+      case TCP_TIME_WAIT:
+        break;
+      
+      case TCP_ESTABLISHED:
+        break;
+        
+      default:
+        DBG("something really bad has happened\n");
+        break;
+    }
+    
+    
+    
   }
   
   
@@ -114,7 +260,7 @@ module LtcpP {
   command error_t Ltcp.bind[uint8_t client](uint16_t port) {
     struct sockaddr_in6 addr;
     
-    // check, that no other socket already listens on this port
+    // check, that no other socket already uses this port
     int i;
     for (i = 0; i < uniqueCount("TCP_CLIENT"); i++) {
       if (socks[i].l_ep.sin6_port == port) {
@@ -124,7 +270,7 @@ module LtcpP {
     }
     
     // set empty address and bounded port number into local address
-    // FIXME: sice IP address is not in use, just have port or make ip address usable
+    // FIXME: since IP address is not in use, just have port or make ip address usable
     memclr(addr.sin6_addr.s6_addr, 16);
     addr.sin6_port = htons(port);
     
@@ -166,7 +312,7 @@ module LtcpP {
     
     sock->state = TCP_SYN_SENT;
     sock->seqno++;
-    sock->retx = TCP_N_RETRIES;
+    sock->retx = 0;
     
     return SUCCESS;
   }
@@ -183,12 +329,12 @@ module LtcpP {
   command error_t Ltcp.sendFlagged[uint8_t client](void *payload, uint16_t len, 
                                               tcp_flag_t flags){
     struct ip6_packet pkt;
-    struct tcp_hdr tcp;
+    struct tcp_hdr *tcp;
     struct tcplib_sock *sock;
     struct ip_iovec v;
     struct ip_iovec w;
     
-    //if (tcplib_send(&socks[client], payload, len) < 0) return FAIL;
+    void * inbuf_payload;
     
     sock = &socks[client];
     
@@ -204,9 +350,24 @@ module LtcpP {
       return FAIL;
     }
     
-    v.iov_base = payload;
+    // max segment size is set by the length of the provided tx_buf
+    if ( len > (sock->tx_buf_len - sizeof(struct tcp_hdr))) {
+      DBG("send failed: txb too small");
+      return FAIL;
+    }
+    
+    /* since the iovecs only exist in this function, but the packet
+     * must be kept until acknowledgement has arrived, the packet is constructed
+     * inside the tx_buf. Only ip_header is rebuild on resend */
+    inbuf_payload = sock->tx_buf + sizeof(struct tcp_hdr);
+    memcpy(inbuf_payload, payload, len);
+    
+    v.iov_base = inbuf_payload;
     v.iov_len = len;
     v.iov_next = NULL;
+    
+    // set tcp_hdr pointer accordingly
+    tcp = sock->tx_buf;
     
     // fill in packet fields
     memclr((uint8_t *)&pkt.ip6_hdr, sizeof(pkt.ip6_hdr));
@@ -216,25 +377,24 @@ module LtcpP {
     // fill the source in
     call IPAddress.setSource(&pkt.ip6_hdr);
     
-    /* FIXME: htonl for network addresses necessary????
-              in buffer operations to safe memory
-              */
+    /* FIXME: htonl for network addresses necessary????              
+    */
     
     // set the tcp header values
-    tcp.srcport = sock->l_ep.sin6_port;
-    tcp.dstport = sock->r_ep.sin6_port;
-    tcp.seqno = htonl(sock->seqno);
-    tcp.ackno = htonl(sock->ackno);
-    tcp.offset = 0x5; // options are not implemented
-    tcp.flags = flags;
-    tcp.window = 0x0; // consideration of this implementation
-    tcp.chksum = 0x0; // for now
-    tcp.urgent = 0x0;
+    tcp->srcport = sock->l_ep.sin6_port;
+    tcp->dstport = sock->r_ep.sin6_port;
+    tcp->seqno = htonl(sock->seqno);
+    tcp->ackno = htonl(sock->ackno);
+    tcp->offset = 0x5; // options are not implemented
+    tcp->flags = flags;
+    tcp->window = 0x0; // consideration of this implementation
+    tcp->chksum = 0x0; // for now
+    tcp->urgent = 0x0;
     
     
     // set ip fields
     pkt.ip6_hdr.ip6_vfc = IPV6_VERSION;
-    pkt.ip6_hdr.ip6_nxt = IANA_UDP;
+    pkt.ip6_hdr.ip6_nxt = IANA_TCP;
     pkt.ip6_hdr.ip6_plen = (len + sizeof(struct tcp_hdr));
     
     w.iov_base = (uint8_t *)&tcp;
@@ -243,10 +403,7 @@ module LtcpP {
     
     pkt.ip6_data = &w;
     
-    tcp.chksum = htons(msg_cksum(&pkt.ip6_hdr, &w, IANA_TCP));
-    
-    // the data must be buffered until ack is received
-    
+    tcp->chksum = htons(msg_cksum(&pkt.ip6_hdr, &w, IANA_TCP));
     
     // set socket into TCP_ACKPENDING
     sock->internal_state |= TCP_ACKPENDING;
@@ -269,17 +426,29 @@ module LtcpP {
     
     switch (sock->state) {
       case TCP_CLOSE_WAIT:
-        // TODO: send finack
-        sock->retx = TCP_N_RETRIES;
+        sock->retx = 0;
         sock->state = TCP_LAST_ACK;
+        
+        if (call Ltcp.sendFlagged[client](NULL, 0 , (TCP_ACK | TCP_FIN)) != SUCCESS) {
+          
+          DBG("error sending FINACK\n");
+          return FAIL;
+        }
+        
         return SUCCESS;
         break;
         
       case TCP_ESTABLISHED:
         
-        // TODO: send finack
-        sock->retx = TCP_N_RETRIES;
+        sock->retx = 0;
         sock->state = TCP_FIN_WAIT_1;
+        
+        if (call Ltcp.sendFlagged[client](NULL, 0 , (TCP_ACK | TCP_FIN)) != SUCCESS) {
+          
+          DBG("error sending FINACK\n");
+          return FAIL;
+        }
+        
         return SUCCESS;
         break;
         
@@ -303,10 +472,15 @@ module LtcpP {
       case TCP_LISTEN:
         break;
       default:
-        // TODO: send reset 
         memset(&(socks[client].l_ep), 0, sizeof(struct sockaddr_in6));
         memset(&(socks[client].r_ep), 0, sizeof(struct sockaddr_in6));
         socks[client].state = TCP_CLOSED;
+        
+        if (call Ltcp.sendFlagged[client](NULL, 0 , (TCP_RST)) != SUCCESS) {
+          
+          DBG("error sending RST on abort\n");
+          return FAIL;
+        }
         
         DBG("socket reseted\n");
         
@@ -332,8 +506,7 @@ module LtcpP {
   /* risen after Tcp connection is fully closed */
   default event void Ltcp.closed[uint8_t cid](error_t e) { }
   
-  
-  /* FIXME: rise when??? */
+  /* risen after packet send was acked. cannot send another packet before this happens */
   default event void Ltcp.acked[uint8_t cid]() { }
   
 }
