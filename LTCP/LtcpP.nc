@@ -124,6 +124,7 @@ module LtcpP {
             else {
               
               // send fails permanen -> signal user the fail
+              sock->retx = 0;
               sock->state = TCP_ESTABLISHED_NOMINAL;
               signal Ltcp.sendDone[i](FAIL);
               
@@ -169,9 +170,34 @@ module LtcpP {
     // check, if addressed port is on a registered socket
     for (i = 0; i <= uniqueCount("TCP_CLIENT"); i++) {
       if (i == uniqueCount("TCP_CLIENT")) {
+        struct tcp_hdr tcp1;
+        struct ip_iovec v1;
+        struct ip6_packet pkt1;
+        
+        // set the tcp header values
+        tcp1.srcport = htons(tcp1.dstport);
+        tcp1.dstport = htons(tcp1.srcport);
+        tcp1.seqno = 0x0;
+        tcp1.ackno = 0x0;
+        tcp1.offset = 0x5; // options are not implemented
+        tcp1.flags = TCP_RST;
+        tcp1.window = 0x0; // consideration of this implementation
+        tcp1.chksum = 0x0; // for now
+        tcp1.urgent = 0x0;
+        
+        call IPAddress.setSource(&pkt1.ip6_hdr);
+        // set ip fields
+        pkt1.ip6_hdr.ip6_vfc = IPV6_VERSION;
+        pkt1.ip6_hdr.ip6_nxt = IANA_TCP;
+        pkt1.ip6_hdr.ip6_plen = (len + sizeof(struct tcp_hdr));
+        
+        pkt1.ip6_data = &v1;
+        
+        tcp1.chksum = htons(msg_cksum(&pkt1.ip6_hdr, &v1, IANA_TCP));
         
         DBG("recv error: no open socket\n");
-        // TODO: send rst without sock  on closed
+        
+        call IP.send(&pkt1);
         
         return;
       }
@@ -185,9 +211,6 @@ module LtcpP {
     sock = &socks[i];
     payload_ptr = tcp + sizeof(struct tcp_hdr) + (tcp->offset);
     payload_len = len - sizeof(struct tcp_hdr) - (tcp->offset/4);
-    
-    // TODO:check if socket is in condition to receive FIXME: needed???
-    
     
     
     switch (sock->state) {
@@ -383,19 +406,56 @@ module LtcpP {
       
       // normal usage
       case TCP_ESTABLISHED_NOMINAL:
-      //TODO
-        break;
-      
-      case TCP_ESTABLISHED_ACKPENDING:
-      //TODO
-        break;
         
-      case TCP_ESTABLISHED_PROCESSING:
-      //TODO
-        break;
-      
-      
+        if (! (tcp->flags & TCP_FIN)) {
+          
+          // signal user of the data
+          signal Ltcp.recv[i](payload_ptr, payload_len);
+          
+          // send ack
+          sock->ackno = tcp->seqno;
+          call Ltcp.sendFlagged[i](NULL, 0, TCP_ACK);
+          
+          DBG("Data received\n");
+          
+          break;
+          
+        }
+        
+        
+      case TCP_ESTABLISHED_ACKPENDING:
+        
+        if ( (tcp->flags & TCP_ACK) && !(tcp->flags & TCP_FIN) ) {
+          
+          // sucessfull ack
+          if (tcp->ackno == sock->seqno) {
+            
+            DBG("Packet acked\n");
+            signal Ltcp.sendDone[i](SUCCESS);
+            sock->state = TCP_ESTABLISHED_NOMINAL;
+            
+          }
+          
+          // acked packet has also data
+          if (payload_len != 0) {
+            signal Ltcp.recv[i](payload_ptr, payload_len);
+            
+            sock->ackno = tcp->seqno;
+            call Ltcp.sendFlagged[i](NULL, 0, TCP_ACK);
+          }
+          
+          break;
+        }
+        
       default:
+        
+        // in ESTABLISHED state 
+        if (tcp->flags & TCP_FIN) {
+          
+          sock->ackno = tcp->seqno;
+          call Ltcp.sendFlagged[i](NULL, 0, TCP_ACK);
+        }
+        
         DBG("something really bad has happened\n");
         break;
     }
@@ -572,8 +632,7 @@ module LtcpP {
     // fill the source in
     call IPAddress.setSource(&pkt.ip6_hdr);
     
-    /* FIXME: htonl for network addresses necessary????              
-    */
+    // FIXME: check ix tx_buffer is long enough
     
     // set the tcp header values
     tcp->srcport = sock->l_ep.sin6_port;
@@ -634,7 +693,6 @@ module LtcpP {
         
       case TCP_ESTABLISHED_NOMINAL:
       case TCP_ESTABLISHED_ACKPENDING:
-      case TCP_ESTABLISHED_PROCESSING:
         
         if (call Ltcp.sendFlagged[client](NULL, 0 , (TCP_FIN)) != SUCCESS) {
           
