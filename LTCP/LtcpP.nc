@@ -453,6 +453,8 @@ module LtcpP {
         if (tcp->flags & TCP_FIN) {
           
           sock->ackno = tcp->seqno;
+          sock->state = TCP_CLOSING;
+          signal Ltcp.closing[i]();
           call Ltcp.sendFlagged[i](NULL, 0, TCP_ACK);
         }
         
@@ -520,6 +522,7 @@ module LtcpP {
       for (i = TCP_RESERVED_PORTS; i < 65335U; i++) {
         
         if (call Ltcp.bind[client](i) == SUCCESS) {
+          port_found = 1;
           break;
         }
         
@@ -597,7 +600,7 @@ module LtcpP {
   
   
   /* send stuff over the socket and specify the falgs to be set */
-  // TODO: make it an internal call
+  // FIXME: make it an internal call
   command error_t Ltcp.sendFlagged[uint8_t client](void *payload, uint16_t len, 
                                               tcp_flag_t flags){
     struct ip6_packet pkt;
@@ -649,7 +652,9 @@ module LtcpP {
     // set ip fields
     pkt.ip6_hdr.ip6_vfc = IPV6_VERSION;
     pkt.ip6_hdr.ip6_nxt = IANA_TCP;
+    
     pkt.ip6_hdr.ip6_plen = (len + sizeof(struct tcp_hdr));
+    DBG("calced plen %d\n", pkt.ip6_hdr.ip6_plen );
     
     w.iov_base = (uint8_t *)&tcp;
     w.iov_len = sizeof(struct tcp_hdr);
@@ -761,6 +766,8 @@ module LtcpP {
   
   /* risen after Tcp connection is fully closed */
   default event void Ltcp.closed[uint8_t cid](error_t e) { }
+  default event void Ltcp.closing[uint8_t cid]() { }
+  
   
   /* risen after packet send was acked. cannot send another packet before this happens */
   default event void Ltcp.acked[uint8_t cid]() { }

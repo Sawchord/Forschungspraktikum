@@ -1,4 +1,4 @@
-COMPONENT=TCPEchoC
+COMPONENT=SerialTCPC
 # uncomment this for network programming support
 # BOOTLOADER=tosboot
 
@@ -42,7 +42,7 @@ PFLAGS += -DNEW_PRINTF_SEMANTICS -DPRINTFUART_ENABLED
 PFLAGS += -DDEBUG_OUT
 
 # Include the folder
-CFLAGS += -I$/LTCP
+CFLAGS += -I../LTCP
 
 include $(MAKERULES)
 

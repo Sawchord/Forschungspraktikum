@@ -1,5 +1,5 @@
 /* Coypright 2016 Leon Tan
- * Licensed unser GPLv2
+ * Licensed under GPLv2
  */
 #include <lib6lowpan/6lowpan.h>
 #include <Ltcp.h>
