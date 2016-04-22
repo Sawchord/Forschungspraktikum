@@ -25,6 +25,40 @@
 
 #include <lib6lowpan/ip.h>
 
+/* the period between two calls to the timer process in milliseconds*/
+#ifndef TCP_PROCESS_TIME
+#define TCP_PROCESS_TIME 512
+#endif
+
+/* all ports below this one are reserved and will not be used on connect */
+#ifndef TCP_RESERVED_PORTS
+#define TCP_RESERVED_PORTS 1024
+#endif
+
+/* start retry frequency (gets doubled on every retry) */
+#ifndef TCP_RETRY_FREQ
+#define TCP_RETRY_FREQ 1000;
+#endif
+
+/* the standard time for TCP_TIME_WAIT in ms */
+#ifndef TCP_TIMEWAIT_TIME
+#define TCP_TIMEWAIT_TIME 2000
+#endif
+
+/* number of retries before giving up */
+#ifndef TCP_N_RETRIES
+#define TCP_N_RETRIES 6
+#endif
+
+/* debug output */
+#ifdef DEBUG_OUT
+#include <printf.h>
+#define DBG(...) printf(__VA_ARGS__); printfflush()
+#else
+#define DBG(...) 
+#endif
+
+
 /* states a socket can be in */
 typedef enum {
   TCP_CLOSED = 0x0,
@@ -60,8 +94,10 @@ typedef enum {
 
 struct tcplib_sock {
   
-  //uint8_t flags;
   tcp_flag_t flags;
+  
+  void* last_payload;
+  uint16_t last_payload_len;
   
   /* local and remote endpoints */
   struct sockaddr_in6 l_ep;
@@ -94,7 +130,7 @@ struct tcplib_sock {
   int8_t retx;
   
   /* retransmission timer */
-  uint16_t retxcnt;
+  uint16_t rettim;
   
   /* this needs to be at the end so
    *   we can call init() on a socket

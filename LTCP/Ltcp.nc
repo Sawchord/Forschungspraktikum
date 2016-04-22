@@ -24,7 +24,12 @@ interface Ltcp {
   command error_t connect(struct sockaddr_in6 *dest,
                           void *tx_buf, int tx_buf_len);
   event void connectDone(error_t e);
-
+  
+  /*
+   * Is signaled, if the packet send has been delivered or send failed
+   */
+  event void sendDone(error_t e);
+  
   /*
    * Send and receive data on a socket.  The socket must be CONNECTed
    * for these to succeed.

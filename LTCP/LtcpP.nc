@@ -24,40 +24,9 @@
 #include <lib6lowpan/ip.h>
 #include <lib6lowpan/in_cksum.h>
 
-/* the period between two calls to the timer process in milliseconds*/
-#ifndef TCP_PROCESS_TIME
-  #define TCP_PROCESS_TIME 512
-#endif
-
-/* all ports below this one are reserved and will not be used on connect */
-#ifndef TCP_RESERVED_PORTS
-  #define TCP_RESERVED_PORTS 1024
-#endif
-
-/* start retry frequency (gets doubled on every retry) */
-#ifndef TCP_RETRY_FREQ
-  #define TCP_RETRY_FREQ 1000;
-#endif
-
-/* the standard time for TCP_TIME_WAIT in ms */
-#ifndef TCP_TIMEWAIT_TIME
-  #define TCP_TIMEWAIT_TIME 2000
-#endif
-
-/* number of retries before giving up */
-#ifndef TCP_N_RETRIES
-  #define TCP_N_RETRIES 6
-#endif
 
 
-
-/* debug output */
-#ifdef DEBUG_OUT
-  #include <printf.h>
-  #define DBG(...) printf(__VA_ARGS__); printfflush()
-#else
-  #define DBG(...) 
-#endif
+#include "Ltcp.h"
 
 module LtcpP {
   provides interface Ltcp[uint8_t client];
@@ -90,6 +59,8 @@ module LtcpP {
       struct tcplib_sock *sock;
       sock = &socks[i];
       
+      DBG("LTCP init complete\n");
+      
       // set complete struct to 0
       memset(sock, 0, sizeof(struct tcplib_sock) - sizeof(struct tcplib_sock *));
       sock->mss = 200;
@@ -99,6 +70,8 @@ module LtcpP {
       return SUCCESS;
       
     }
+    
+    return FAIL;
   }
 
   /* --------------- Implemented events ------------------ */
@@ -110,10 +83,62 @@ module LtcpP {
   
   /* process time specific parts */
   event void Timer.fired() {
-    /* TODO: process time spefic part */
     
+    struct tcplib_sock *sock;
+    int i;
     
-    
+    // check all sockets for need to update
+    for (i = 0; i < uniqueCount("TCP_CLIENT"); i++) {
+      
+      sock = &socks[i];
+      
+      // if socket in time dependent state, update time
+      if (sock->state == TCP_TIME_WAIT || sock->state == TCP_ESTABLISHED_ACKPENDING) {
+        if ( ((int32_t) sock->rettim - TCP_PROCESS_TIME) > 0) {
+          sock->rettim = 0;
+        }
+        else {
+          sock->rettim -= TCP_PROCESS_TIME;
+        }
+      }
+      
+      switch (sock->state) {
+        case TCP_TIME_WAIT:
+          
+          if (sock->rettim == 0) {
+            sock->retx = 0;
+            sock->state = TCP_CLOSED;
+          }
+          
+          break;
+        
+        case TCP_ESTABLISHED_ACKPENDING:
+          
+          if (sock->rettim == 0) {
+            if (sock->retx < TCP_N_RETRIES) {
+              
+              sock->retx++;
+              call Ltcp.send[i](sock->last_payload, sock->last_payload_len);
+              
+            }
+            else {
+              
+              // send fails permanen -> signal user the fail
+              sock->state = TCP_ESTABLISHED_NOMINAL;
+              signal Ltcp.sendDone[i](FAIL);
+              
+            }
+            
+          }
+          
+          break;
+          
+        default:
+          break;
+                
+        
+      }
+    }
   }
   
   
@@ -151,7 +176,7 @@ module LtcpP {
         return;
       }
       
-      if (socks[i].l_ep.sin6_port == tcp->srcport) {
+      if (socks[i].l_ep.sin6_port == htons(tcp->srcport) ) {
         break;
       }
       
@@ -265,7 +290,7 @@ module LtcpP {
         }
         else if (tcp->flags & TCP_RST) {
           
-          DBG("received RST in SYN_SEND -> closing");
+          DBG("received RST in SYN_SEND -> closing\n");
           sock->state = TCP_CLOSED;
           signal Ltcp.connectDone[i](FAIL);
           break;
@@ -297,12 +322,12 @@ module LtcpP {
         
         if (tcp->flags & TCP_SYN) {
           
-          // TODO: set r_ep in sock accordingly
           // ask user, if connection should be accepted
           if (signal Ltcp.accept[i](&(sock->r_ep), (sock->tx_buf), &(sock->tx_buf_len))) {
           
             // set the ackno manually
             sock->ackno = tcp->seqno;
+            sock->seqno = tcp->ackno;
             
             if (call Ltcp.sendFlagged[i](NULL, 0, (TCP_SYN | TCP_ACK) ) != SUCCESS) {
               DBG("error while sending SYNACK\n");
@@ -339,7 +364,7 @@ module LtcpP {
         
         if (tcp->flags & TCP_ACK) {
           
-          DBG("going to TCP_TIME_WAIT");
+          DBG("going to TCP_TIME_WAIT\n");
           sock->state = TCP_TIME_WAIT;
           break;
           
@@ -358,12 +383,15 @@ module LtcpP {
       
       // normal usage
       case TCP_ESTABLISHED_NOMINAL:
+      //TODO
         break;
       
       case TCP_ESTABLISHED_ACKPENDING:
+      //TODO
         break;
         
       case TCP_ESTABLISHED_PROCESSING:
+      //TODO
         break;
       
       
@@ -385,11 +413,13 @@ module LtcpP {
     // check, that no other socket already uses this port
     int i;
     for (i = 0; i < uniqueCount("TCP_CLIENT"); i++) {
-      if (socks[i].l_ep.sin6_port == port) {
+      if (socks[i].l_ep.sin6_port == htons(port)) {
         DBG("Port %d was already in use\n", port);
         return FAIL;
       }
     }
+    
+    DBG("Bound port %d \n", port);
     
     // set empty address and bounded port number into local address
     // FIXME: since IP address is not in use, just have port or make ip address usable
@@ -437,7 +467,7 @@ module LtcpP {
       
       if (!port_found) {
         
-        DBG("connect error: could not find free port");
+        DBG("connect error: could not find free port\n");
         return FAIL;
       }
       
@@ -447,7 +477,7 @@ module LtcpP {
       break;
     
     default:
-      DBG("connect fail: wrong socket state");
+      DBG("connect fail: wrong socket state\n");
       return FAIL;
     }
     
@@ -459,7 +489,7 @@ module LtcpP {
     sock->retx = 0;
     // send syn
     if (call Ltcp.sendFlagged[client](NULL, 0, (TCP_SYN)) != SUCCESS) {
-      DBG("fail to send SYN during CONNECT");
+      DBG("fail to send SYN during CONNECT\n");
       return FAIL;
     }
     
@@ -469,12 +499,45 @@ module LtcpP {
   
   /* send stuff over the socket */
   command error_t Ltcp.send[uint8_t client](void *payload, uint16_t len) {
-    return call Ltcp.sendFlagged[client](payload, len, 0x0);
+    
+    error_t e;
+    struct tcplib_sock *sock;
+    
+    sock = &socks[client];
+    
+    sock->last_payload = payload;
+    sock->last_payload_len = len;
+    
+    // check if socket is in correct state
+    if (sock->state != TCP_ESTABLISHED_NOMINAL) {
+      DBG("send failed: connection was not established\n");
+      return FAIL;
+    }    
+    
+    // max segment size is set by the length of the provided tx_buf
+    if ( len > (sock->tx_buf_len - sizeof(struct tcp_hdr))) {
+      DBG("send failed: txb too small\n");
+      return FAIL;
+    }
+    
+    if (sock->state == TCP_ESTABLISHED_NOMINAL) {
+    
+      e = call Ltcp.sendFlagged[client](payload, len, 0x0);
+      
+      // set socket into ACKPENDING
+      sock->state = TCP_ESTABLISHED_ACKPENDING;
+      
+      return e;
+    }
+    else {
+      return FAIL;
+    }
   }
   
   
   
   /* send stuff over the socket and specify the falgs to be set */
+  // TODO: make it an internal call
   command error_t Ltcp.sendFlagged[uint8_t client](void *payload, uint16_t len, 
                                               tcp_flag_t flags){
     struct ip6_packet pkt;
@@ -487,17 +550,6 @@ module LtcpP {
     
     sock = &socks[client];
     
-    // check if socket is in correct state
-    if (sock->state != TCP_ESTABLISHED_NOMINAL) {
-      DBG("send failed: connection was not established\n");
-      return FAIL;
-    }    
-    
-    // max segment size is set by the length of the provided tx_buf
-    if ( len > (sock->tx_buf_len - sizeof(struct tcp_hdr))) {
-      DBG("send failed: txb too small");
-      return FAIL;
-    }
     
     /* since the iovecs only exist in this function, but the packet
      * must be kept until acknowledgement has arrived, the packet is constructed
@@ -548,8 +600,6 @@ module LtcpP {
     
     tcp->chksum = htons(msg_cksum(&pkt.ip6_hdr, &w, IANA_TCP));
     
-    // set socket into ACKPENDING
-    sock->state = TCP_ESTABLISHED_ACKPENDING;
     
     // increment seqno
     sock->seqno += len;
@@ -645,6 +695,8 @@ module LtcpP {
   
   /* risen after handshake is fully done or aborted */
   default event void Ltcp.connectDone[uint8_t cid](error_t e) {}
+  
+  default event void Ltcp.sendDone[uint8_t cid](error_t e) {}
   
   /* risen, if packet is received and TCP layer preprocessing is done */
   default event void Ltcp.recv[uint8_t cid](void *payload, uint16_t len) {  }

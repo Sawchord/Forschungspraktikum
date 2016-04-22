@@ -39,6 +39,11 @@ module TCPEchoP {
     uint8_t tbf[256];
     
     event void Boot.booted() {
+        
+        #ifdef PRINTFUART_ENABLED
+            printf("Boooooted\n");
+        #endif
+        
         call RadioControl.start();
         timerStarted = FALSE;
         
@@ -83,6 +88,9 @@ module TCPEchoP {
         
         call Leds.led2Toggle();
         return TRUE;
+    }
+    
+    event void Echo.sendDone(error_t e) {
     }
     
     event void Echo.recv(void *data, uint16_t len) {
