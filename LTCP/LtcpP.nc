@@ -63,10 +63,10 @@ module LtcpP {
       
       // set complete struct to 0
       memset(sock, 0, sizeof(struct tcplib_sock) - sizeof(struct tcplib_sock *));
-      sock->mss = 200;
-      sock->my_wind = 0;
-      sock->cwnd = sock->mss;
-      sock->ssthresh = 0xffff;
+      //sock->mss = 200;
+      //sock->my_wind = 0;
+      //sock->cwnd = sock->mss;
+      //sock->ssthresh = 0xffff;
       return SUCCESS;
       
     }
@@ -501,8 +501,10 @@ module LtcpP {
   /* connect the socket to a remote address */
   command error_t Ltcp.connect[uint8_t client](struct sockaddr_in6 *dest,
                                               void *tx_buf, int tx_buf_len) {
+    
+    
     uint16_t i;
-    uint8_t j;
+    //uint8_t j;
     
     uint8_t port_found = 0;
     
@@ -513,40 +515,40 @@ module LtcpP {
     sock->tx_buf_len = tx_buf_len;
     
     // set socket remote endpoint options
-    memcpy(&(sock->l_ep), dest, sizeof(struct sockaddr_in6));
+    memcpy(&(sock->r_ep), dest, sizeof(struct sockaddr_in6));
     
     switch (sock->state) {
-    case TCP_CLOSED:
-    
-      // find a free port number greater than TCP_RESERVED_PORTS
-      for (i = TCP_RESERVED_PORTS; i < 65335U; i++) {
-        
-        if (call Ltcp.bind[client](i) == SUCCESS) {
-          port_found = 1;
-          break;
+      case TCP_CLOSED:
+      
+        // find a free port number greater than TCP_RESERVED_PORTS
+        for (i = TCP_RESERVED_PORTS; i < 65335U; i++) {
+          
+          if (call Ltcp.bind[client](i) == SUCCESS) {
+            port_found = 1;
+            break;
+          }
+          
         }
         
-      }
-      
-      if (!port_found) {
+        if (!port_found) {
+          
+          DBG("connect error: could not find free port\n");
+          return FAIL;
+        }
         
-        DBG("connect error: could not find free port\n");
+        break;
+        
+      case TCP_LISTEN:
+        break;
+      
+      default:
+        DBG("connect fail: wrong socket state\n");
         return FAIL;
-      }
-      
-      break;
-      
-    case TCP_LISTEN:
-      break;
-    
-    default:
-      DBG("connect fail: wrong socket state\n");
-      return FAIL;
     }
     
     // set all important stuff for that particular socket
     sock->ackno = 0;
-    sock->seqno = call Random.rand16();
+    sock->seqno = call Random.rand32();
     
     sock->state = TCP_SYN_SENT;
     sock->retx = 0;
@@ -605,12 +607,12 @@ module LtcpP {
                                               tcp_flag_t flags){
     struct ip6_packet pkt;
     struct tcp_hdr *tcp;
-    struct tcplib_sock *sock;
     struct ip_iovec v;
     struct ip_iovec w;
     
     void * inbuf_payload;
     
+    struct tcplib_sock *sock;
     sock = &socks[client];
     
     
@@ -653,19 +655,28 @@ module LtcpP {
     pkt.ip6_hdr.ip6_vfc = IPV6_VERSION;
     pkt.ip6_hdr.ip6_nxt = IANA_TCP;
     
-    pkt.ip6_hdr.ip6_plen = (len + sizeof(struct tcp_hdr));
-    DBG("calced plen %d\n", pkt.ip6_hdr.ip6_plen );
+    pkt.ip6_hdr.ip6_plen = htons(len + sizeof(struct tcp_hdr));
+    //pkt.ip6_hdr.ip6_plen = 10;
     
-    w.iov_base = (uint8_t *)&tcp;
+    //DBG("calced plen %d\n", pkt.ip6_hdr.ip6_plen );
+    
+    w.iov_base = (uint8_t *)tcp;
     w.iov_len = sizeof(struct tcp_hdr);
-    w.iov_next = &v;
+    
+    if (len != 0) {
+      w.iov_next = &v;
+    }
+    else {
+      w.iov_next = NULL;
+    }
     
     pkt.ip6_data = &w;
+    //pkt.ip6_data = NULL;
     
     tcp->chksum = htons(msg_cksum(&pkt.ip6_hdr, &w, IANA_TCP));
     
     
-    // increment seqno
+    // increment seqno FIXME: before or after sending??
     sock->seqno += len;
     
     return call IP.send(&pkt);

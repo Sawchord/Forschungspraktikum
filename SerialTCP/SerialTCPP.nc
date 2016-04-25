@@ -72,7 +72,7 @@ module SerialTCPP {
     
     if (TOS_NODE_ID == 1) {
       dest.sin6_port = htons(1337);
-      inet_pton6("fe0c::2", &dest.sin6_addr);
+      inet_pton6("fec0::2", &(dest.sin6_addr));
       
       if(call Connection.connect(&dest, tx, 512) == SUCCESS){
         call Leds.led0Toggle();

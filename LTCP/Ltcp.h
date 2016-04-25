@@ -93,17 +93,12 @@ typedef enum {
 
 struct tcplib_sock {
   
-  tcp_flag_t flags;
+  //tcp_flag_t flags;
+  /* current connection state */
+  tcplib_sock_state_t state;
   
   void* last_payload;
   uint16_t last_payload_len;
-  
-  /* local and remote endpoints */
-  struct sockaddr_in6 l_ep;
-  struct sockaddr_in6 r_ep;
-  
-  /* current connection state */
-  tcplib_sock_state_t state;
   
   void    *tx_buf;
   uint16_t tx_buf_len;
@@ -111,14 +106,14 @@ struct tcplib_sock {
   /* max segment size, or default if
    *   we didn't bother to pull it out
    *   of the options field */
-  uint16_t mss;
+  //uint16_t mss;
   
-  uint16_t my_wind;
+  //uint16_t my_wind;
   /* the window the other end is
    *   reporting */
-  uint16_t r_wind;
-  uint16_t cwnd;
-  uint16_t ssthresh;
+  //uint16_t r_wind;
+  //uint16_t cwnd;
+  //uint16_t ssthresh;
   
   // the current next sequence number for ourgoing data.
   uint32_t seqno;
@@ -135,7 +130,12 @@ struct tcplib_sock {
    *   we can call init() on a socket
    *   without blowing away the linked
    *   list */
-  struct tcplib_sock *next;
+  //struct tcplib_sock *next;
+  
+  /* local and remote endpoints */
+  struct sockaddr_in6 l_ep;
+  struct sockaddr_in6 r_ep;
+  
 };
 
 
