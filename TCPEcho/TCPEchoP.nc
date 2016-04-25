@@ -72,6 +72,8 @@ module TCPEchoP {
     event void Echo.connectDone(error_t e) {
     }
     
+    event void Echo.closing() {}
+    
     event void Echo.closed(error_t e) {\
         call Leds.led0Toggle();
         call Echo.bind(7);

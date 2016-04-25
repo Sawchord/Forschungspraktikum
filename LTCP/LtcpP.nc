@@ -169,44 +169,63 @@ module LtcpP {
     
     // check, if addressed port is on a registered socket
     for (i = 0; i <= uniqueCount("TCP_CLIENT"); i++) {
+      
+      //DBG("check sock %d\n", i);
+      //DBG("port compare %d : %d\n", socks[i].l_ep.sin6_port, tcp->dstport);
+      // found no port, send RST on the fly
+      
       if (i == uniqueCount("TCP_CLIENT")) {
-        struct tcp_hdr tcp1;
+        //struct tcp_hdr tcp1;
         struct ip_iovec v1;
+        uint16_t t;
         struct ip6_packet pkt1;
         
-        // set the tcp header values
-        tcp1.srcport = htons(tcp1.dstport);
-        tcp1.dstport = htons(tcp1.srcport);
-        tcp1.seqno = 0x0;
-        tcp1.ackno = 0x0;
-        tcp1.offset = 0x5; // options are not implemented
-        tcp1.flags = TCP_RST;
-        tcp1.window = 0x0; // consideration of this implementation
-        tcp1.chksum = 0x0; // for now
-        tcp1.urgent = 0x0;
+        // build a RST tcp packet
+        t = tcp->srcport;
+        tcp->srcport = tcp->dstport;
+        tcp->dstport = t;
         
-        call IPAddress.setSource(&pkt1.ip6_hdr);
+        // set the ackno and set seqno to zero
+        tcp->ackno = htonl(ntohl(tcp->seqno) + 1);
+        tcp->seqno = 0x0;
+        tcp->offset = 0x5 << 4; // options are not implemented
+        tcp->flags = TCP_RST | TCP_ACK;
+        tcp->window = 0x0;
+        tcp->chksum = 0x0;
+        tcp->urgent = 0x0;
+        
         // set ip fields
         pkt1.ip6_hdr.ip6_vfc = IPV6_VERSION;
         pkt1.ip6_hdr.ip6_nxt = IANA_TCP;
-        pkt1.ip6_hdr.ip6_plen = (len + sizeof(struct tcp_hdr));
+        pkt1.ip6_hdr.ip6_plen = htons(sizeof(struct tcp_hdr));
+        
+        call IPAddress.setSource(&pkt1.ip6_hdr);
+        
+        v1.iov_base = (void* )tcp;
+        v1.iov_len = sizeof(struct tcp_hdr);
+        v1.iov_next = NULL;
         
         pkt1.ip6_data = &v1;
         
-        tcp1.chksum = htons(msg_cksum(&pkt1.ip6_hdr, &v1, IANA_TCP));
+        // copy address to destination
+        memcpy(&pkt1.ip6_hdr.ip6_dst, &(iph->ip6_src), 16);
         
+        tcp->chksum = htons(msg_cksum(&pkt1.ip6_hdr, &v1, IANA_TCP));
         DBG("recv error: no open socket\n");
         
-        call IP.send(&pkt1);
-        
+        if (call IP.send(&pkt1) != SUCCESS) {
+          DBG("error RSTING\n");
+        }
         return;
       }
       
-      if (socks[i].l_ep.sin6_port == htons(tcp->srcport) ) {
+      if (socks[i].l_ep.sin6_port == tcp->dstport ) {
         break;
       }
       
     }
+    
+    DBG("is known port");
     
     sock = &socks[i];
     payload_ptr = tcp + sizeof(struct tcp_hdr) + (tcp->offset);
@@ -345,6 +364,10 @@ module LtcpP {
         
         if (tcp->flags & TCP_SYN) {
           
+          // TODO: set r_ep
+          memcpy(&sock->r_ep.sin6_addr.s6_addr, &(iph->ip6_src), 16);
+          sock->r_ep.sin6_port = tcp->srcport;
+          
           // ask user, if connection should be accepted
           if (signal Ltcp.accept[i](&(sock->r_ep), (sock->tx_buf), &(sock->tx_buf_len))) {
           
@@ -461,9 +484,6 @@ module LtcpP {
         DBG("something really bad has happened\n");
         break;
     }
-    
-    
-    
   }
   
   
@@ -644,7 +664,7 @@ module LtcpP {
     tcp->dstport = sock->r_ep.sin6_port;
     tcp->seqno = htonl(sock->seqno);
     tcp->ackno = htonl(sock->ackno);
-    tcp->offset = 0x5; // options are not implemented
+    tcp->offset = 0x5 << 4; // options are not implemented
     tcp->flags = flags;
     tcp->window = 0x0; // consideration of this implementation
     tcp->chksum = 0x0; // for now
@@ -656,9 +676,6 @@ module LtcpP {
     pkt.ip6_hdr.ip6_nxt = IANA_TCP;
     
     pkt.ip6_hdr.ip6_plen = htons(len + sizeof(struct tcp_hdr));
-    //pkt.ip6_hdr.ip6_plen = 10;
-    
-    //DBG("calced plen %d\n", pkt.ip6_hdr.ip6_plen );
     
     w.iov_base = (uint8_t *)tcp;
     w.iov_len = sizeof(struct tcp_hdr);
@@ -673,7 +690,7 @@ module LtcpP {
     pkt.ip6_data = &w;
     //pkt.ip6_data = NULL;
     
-    tcp->chksum = htons(msg_cksum(&pkt.ip6_hdr, &w, IANA_TCP));
+    //tcp->chksum = htons(msg_cksum(&pkt.ip6_hdr, &w, IANA_TCP));
     
     
     // increment seqno FIXME: before or after sending??
