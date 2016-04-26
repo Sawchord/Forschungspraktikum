@@ -36,7 +36,7 @@ module TCPEchoP {
     bool timerStarted;
     struct sockaddr_in6 route_dest;
     
-    uint8_t tbf[256];
+    uint8_t tbf[1024];
     
     event void Boot.booted() {
         
@@ -85,7 +85,7 @@ module TCPEchoP {
     event bool Echo.accept(struct sockaddr_in6 *from, 
         void **tx_buf, uint16_t *tx_buf_len) {
         
-        *tx_buf = &tbf;
+        *tx_buf = tbf;
         *tx_buf_len = 256;
         
         call Leds.led2Toggle();
@@ -101,11 +101,11 @@ module TCPEchoP {
         int i;
         uint8_t *cur = data;
         call Leds.led0Toggle();
-        printf("Echo revc [%i]: ", len);
-        for (i = 0; i < len; i++) {
-            printf("%02x ", cur[i]);
-        }
-        printf(" \r\n");
+        //printf("Echo revc [%i]: ", len);
+        //for (i = 0; i < len; i++) {
+        //    printf("%02x ", cur[i]);
+        //}
+        //printf(" \r\n");
 #endif
         if (call Echo.send(data, len) != SUCCESS) {
             call Leds.led1Toggle();

@@ -151,6 +151,8 @@ module LtcpP {
                      void *payload, size_t len,
                      struct ip6_metadata *meta) {
     
+    uint8_t option_bytes;
+    
     uint8_t i;
     struct tcp_hdr *tcp;
     struct tcplib_sock *sock;
@@ -225,12 +227,27 @@ module LtcpP {
       
     }
     
-    DBG("is known port");
+    DBG("is known port\n");
+    
+    if (tcp->offset != (5 << 4)) {
+      DBG("options not implemented, got offset of %d\n", (tcp->offset >> 4));
+    //  return FAIL;
+    }
+    
+    // calulate the width of the option field
+    option_bytes = ((tcp->offset >> 4) - 5) * 4;
     
     sock = &socks[i];
-    payload_ptr = tcp + sizeof(struct tcp_hdr) + (tcp->offset);
-    payload_len = len - sizeof(struct tcp_hdr) - (tcp->offset/4);
+    payload_ptr = tcp + sizeof(struct tcp_hdr) + option_bytes;
+    payload_len = len - (sizeof(struct tcp_hdr) + option_bytes);
     
+    if (tcp->flags & TCP_SYN || tcp->flags & TCP_FIN) {
+      // if a SYN or a FIN was received, one need to set the acknowledgement number accordingly
+      sock->ackno += 1;
+    }
+    
+    DBG("calculated length of payload %d \n", payload_len);
+    sock->ackno += payload_len;
     
     switch (sock->state) {
       case TCP_CLOSED:
@@ -260,6 +277,7 @@ module LtcpP {
         
         if (tcp->flags & (TCP_FIN | TCP_ACK)) {
           
+          
           // sending ack
           if (call Ltcp.sendFlagged[i](NULL, 0 , (TCP_ACK)) != SUCCESS) {
           DBG("error sending ACK on TCP_FIN_WAIT_1\n");
@@ -270,6 +288,7 @@ module LtcpP {
           
         }
         else if (tcp->flags & TCP_FIN) {
+          
           
           // sending ack
           if (call Ltcp.sendFlagged[i](NULL, 0 , (TCP_ACK)) != SUCCESS) {
@@ -308,6 +327,8 @@ module LtcpP {
         
         if (tcp->flags & (TCP_SYN | TCP_ACK) ) {
           
+          //FIXME: set ackno accordingly
+          
           if (call Ltcp.sendFlagged[i](NULL, 0, (TCP_ACK) ) != SUCCESS) {
             DBG("error while sending ACK in handshake\n");
             break;
@@ -345,10 +366,6 @@ module LtcpP {
         
         if (tcp->flags & (TCP_ACK) ) {
           
-          if (call Ltcp.sendFlagged[i](NULL, 0, (TCP_ACK) ) != SUCCESS) {
-              DBG("error while sending ACK in TCP_SYN_RCVD\n");
-              break;
-            }
           DBG("connection complete\n");
           sock->state = TCP_ESTABLISHED_NOMINAL;
           
@@ -364,21 +381,28 @@ module LtcpP {
         
         if (tcp->flags & TCP_SYN) {
           
-          // TODO: set r_ep
+          
           memcpy(&sock->r_ep.sin6_addr.s6_addr, &(iph->ip6_src), 16);
           sock->r_ep.sin6_port = tcp->srcport;
           
-          // ask user, if connection should be accepted
-          if (signal Ltcp.accept[i](&(sock->r_ep), (sock->tx_buf), &(sock->tx_buf_len))) {
+          DBG("accepting connection on sock %d\n", i);
           
-            // set the ackno manually
-            sock->ackno = tcp->seqno;
-            sock->seqno = tcp->ackno;
+          // ask user, if connection should be accepted
+          if (signal Ltcp.accept[i](&(sock->r_ep), &(sock->tx_buf), &(sock->tx_buf_len))) {
+          
+            // set the ackno manually (+1 since SYN was received)
+            sock->ackno = ntohl(tcp->seqno) + 1;
+            
+            //sock->seqno = ntohl(tcp->ackno);
+            sock->seqno = call Random.rand32();
             
             if (call Ltcp.sendFlagged[i](NULL, 0, (TCP_SYN | TCP_ACK) ) != SUCCESS) {
               DBG("error while sending SYNACK\n");
               break;
             }
+            
+            // increase seqno since SYN was send
+            //sock->seqno += 1;
             
             sock->state = TCP_SYN_RCVD;
             break;
@@ -432,11 +456,14 @@ module LtcpP {
         
         if (! (tcp->flags & TCP_FIN)) {
           
-          // signal user of the data
-          signal Ltcp.recv[i](payload_ptr, payload_len);
+          if (payload_len > 0) {
+            // signal user of the data
+            signal Ltcp.recv[i](payload_ptr, payload_len);
+            
+          }
           
-          // send ack
-          sock->ackno = tcp->seqno;
+          // FIXME:send ack
+          sock->ackno = ntohl(tcp->seqno);
           call Ltcp.sendFlagged[i](NULL, 0, TCP_ACK);
           
           DBG("Data received\n");
@@ -451,12 +478,16 @@ module LtcpP {
         if ( (tcp->flags & TCP_ACK) && !(tcp->flags & TCP_FIN) ) {
           
           // sucessfull ack
-          if (tcp->ackno == sock->seqno) {
+          if ( ntohl(tcp->ackno) == sock->seqno) {
             
             DBG("Packet acked\n");
             signal Ltcp.sendDone[i](SUCCESS);
             sock->state = TCP_ESTABLISHED_NOMINAL;
             
+          }
+          else {
+            DBG("ackno did not fit seqno  ack: %d  seq:%d \n", ntohl(tcp->ackno), sock->seqno);
+            return;
           }
           
           // acked packet has also data
@@ -578,6 +609,9 @@ module LtcpP {
       return FAIL;
     }
     
+    // send SYN, need to increase sequence number afterwards
+    sock-> seqno += 1;
+    
     return SUCCESS;
   }
   
@@ -595,13 +629,13 @@ module LtcpP {
     
     // check if socket is in correct state
     if (sock->state != TCP_ESTABLISHED_NOMINAL) {
-      DBG("send failed: connection was not established\n");
+      DBG("send failed: connection not in condition to send\n");
       return FAIL;
     }    
     
     // max segment size is set by the length of the provided tx_buf
     if ( len > (sock->tx_buf_len - sizeof(struct tcp_hdr))) {
-      DBG("send failed: txb too small\n");
+      DBG("send failed: txb too small  %x : %x\n", len, (sock->tx_buf_len - sizeof(struct tcp_hdr)) );
       return FAIL;
     }
     
@@ -614,6 +648,7 @@ module LtcpP {
       
       return e;
     }
+    
     else {
       return FAIL;
     }
@@ -635,6 +670,9 @@ module LtcpP {
     struct tcplib_sock *sock;
     sock = &socks[client];
     
+    // set tcp_hdr pointer accordingly
+    tcp = sock->tx_buf;
+    memclr(tcp, len + sizeof(struct tcp_hdr));
     
     /* since the iovecs only exist in this function, but the packet
      * must be kept until acknowledgement has arrived, the packet is constructed
@@ -646,16 +684,15 @@ module LtcpP {
     v.iov_len = len;
     v.iov_next = NULL;
     
-    // set tcp_hdr pointer accordingly
-    tcp = sock->tx_buf;
     
     // fill in packet fields
-    memclr((uint8_t *)&pkt.ip6_hdr, sizeof(pkt.ip6_hdr));
-    memclr((uint8_t *)&tcp, sizeof(tcp));
+    memclr(&pkt.ip6_hdr, sizeof(pkt.ip6_hdr));
+    memclr(tcp, sizeof(struct tcp_hdr));
     memcpy(&pkt.ip6_hdr.ip6_dst, &(sock->r_ep.sin6_addr.s6_addr), 16);
     
     // fill the source in
     call IPAddress.setSource(&pkt.ip6_hdr);
+    
     
     // FIXME: check ix tx_buffer is long enough
     
@@ -663,10 +700,15 @@ module LtcpP {
     tcp->srcport = sock->l_ep.sin6_port;
     tcp->dstport = sock->r_ep.sin6_port;
     tcp->seqno = htonl(sock->seqno);
-    tcp->ackno = htonl(sock->ackno);
+    
+    // only set ackno if it is an ack packet
+    if (flags & TCP_ACK) {
+      tcp->ackno = htonl(sock->ackno);
+    }
+    
     tcp->offset = 0x5 << 4; // options are not implemented
     tcp->flags = flags;
-    tcp->window = 0x0; // consideration of this implementation
+    tcp->window = 0x1; // consideration of this implementation
     tcp->chksum = 0x0; // for now
     tcp->urgent = 0x0;
     
@@ -677,7 +719,7 @@ module LtcpP {
     
     pkt.ip6_hdr.ip6_plen = htons(len + sizeof(struct tcp_hdr));
     
-    w.iov_base = (uint8_t *)tcp;
+    w.iov_base = (void*) tcp;
     w.iov_len = sizeof(struct tcp_hdr);
     
     if (len != 0) {
@@ -688,12 +730,14 @@ module LtcpP {
     }
     
     pkt.ip6_data = &w;
-    //pkt.ip6_data = NULL;
     
-    //tcp->chksum = htons(msg_cksum(&pkt.ip6_hdr, &w, IANA_TCP));
+    tcp->chksum = htons(msg_cksum(&pkt.ip6_hdr, &w, IANA_TCP));
     
+    if (flags & TCP_SYN || flags & TCP_FIN) {
+      sock->seqno += 1;
+    }
     
-    // increment seqno FIXME: before or after sending??
+    // increment seqno 
     sock->seqno += len;
     
     return call IP.send(&pkt);
