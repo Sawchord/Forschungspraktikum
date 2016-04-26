@@ -21,8 +21,10 @@ configuration TCPEchoC {
     TCPEchoP.RadioControl -> IPStackC;
     
     components new LtcpSocket() as Echo;
+    components new LtcpSocket() as RevEcho;
     
     TCPEchoP.Echo -> Echo;
+    TCPEchoP.RevEcho -> RevEcho;
     
     TCPEchoP.StatusTimer -> TimerMilliC;
     

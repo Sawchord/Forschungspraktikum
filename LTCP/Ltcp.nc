@@ -52,7 +52,6 @@ interface Ltcp {
    */
   event void closed(error_t e);
   
-  event void closing();
   
   /* 
    * returns TRUE if all previously sent data has been ACKed

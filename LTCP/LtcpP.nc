@@ -344,6 +344,8 @@ module LtcpP {
         
         if (tcp->flags & (TCP_SYN | TCP_ACK) ) {
           
+          sock->ackno = ntohl(tcp->seqno) + 1;
+          
           if (call Ltcp.sendFlagged[i](NULL, 0, (TCP_ACK) ) != SUCCESS) {
             DBG("error while sending ACK in handshake\n");
             break;
@@ -407,7 +409,6 @@ module LtcpP {
             // set the ackno manually (+1 since SYN was received)
             sock->ackno = ntohl(tcp->seqno) + 1;
             
-            //sock->seqno = ntohl(tcp->ackno);
             sock->seqno = call Random.rand32();
             
             if (call Ltcp.sendFlagged[i](NULL, 0, (TCP_SYN | TCP_ACK) ) != SUCCESS) {
@@ -415,15 +416,12 @@ module LtcpP {
               break;
             }
             
-            // increase seqno since SYN was send
-            //sock->seqno += 1;
-            
             sock->state = TCP_SYN_RCVD;
             break;
           }
-          // else reset connection
+          // reset connection
           else {
-            if (call Ltcp.sendFlagged[i](NULL, 0, (TCP_SYN | TCP_ACK) ) != SUCCESS) {
+            if (call Ltcp.sendFlagged[i](NULL, 0, (TCP_RST | TCP_ACK) ) != SUCCESS) {
               DBG("error while sending RST\n");
               break;
             }
@@ -468,6 +466,7 @@ module LtcpP {
       // normal usage
       case TCP_ESTABLISHED_NOMINAL:
         
+        // FIN flagged packets should fall trough
         if (! (tcp->flags & TCP_FIN)) {
           
           // go into processing state
@@ -478,8 +477,6 @@ module LtcpP {
             signal Ltcp.recv[i](payload_ptr, payload_len);
             
           }
-          
-          // sock->ackno = ntohl(tcp->seqno) FIXME: dafuq is this???? ;
           
           /* If the user used send withing the recv event, the received packet gets
            * acknowledged on the answer, if no, the packet need to be acked no
@@ -498,6 +495,7 @@ module LtcpP {
         
       case TCP_ESTABLISHED_ACKPENDING:
         
+        // FIN flagged packets should fall trough
         if ( (tcp->flags & TCP_ACK) && !(tcp->flags & TCP_FIN) ) {
           
           // sucessfull ack
@@ -527,16 +525,26 @@ module LtcpP {
       case TCP_ESTABLISHED_PROCESSING:
       default:
         
-        DBG("Connection is to be terminated");
+        /* if a packet was FIN flagged in any ESTABLISHED state,
+         * it reaches this part of the code */
         
-        // in ESTABLISHED state 
-        if (tcp->flags & TCP_FIN) {
+        DBG("Connection is to be terminated\n");
+        
+        // some tcp imps seem to use this as ending
+        if (tcp->flags & (TCP_FIN | TCP_ACK)) {
+          
+          call Ltcp.sendFlagged[i](NULL, 0, (TCP_FIN | TCP_ACK));
+          
+          sock->state = TCP_CLOSED;
+          signal Ltcp.closed[i](SUCCESS);
+          
+        }
+        else if (tcp->flags & TCP_FIN) {
           
           //sock->ackno = tcp->seqno;
           sock->rettim = TCP_TIMEWAIT_TIME;
           
           sock->state = TCP_CLOSING;
-          signal Ltcp.closing[i]();
           call Ltcp.sendFlagged[i](NULL, 0, TCP_ACK);
         }
         
@@ -557,8 +565,10 @@ module LtcpP {
     int i;
     for (i = 0; i < uniqueCount("TCP_CLIENT"); i++) {
       if (socks[i].l_ep.sin6_port == htons(port)) {
-        DBG("Port %d was already in use\n", port);
-        return FAIL;
+        if(socks[i].state != TCP_CLOSED) {
+          DBG("Port %d was already in use\n", port);
+          return FAIL;
+        }
       }
     }
     
@@ -887,8 +897,6 @@ module LtcpP {
   
   /* risen after Tcp connection is fully closed */
   default event void Ltcp.closed[uint8_t cid](error_t e) { }
-  default event void Ltcp.closing[uint8_t cid]() { }
-  
   
   /* risen after packet send was acked. cannot send another packet before this happens */
   default event void Ltcp.acked[uint8_t cid]() { }
