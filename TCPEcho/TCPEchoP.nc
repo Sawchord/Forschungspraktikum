@@ -86,7 +86,7 @@ module TCPEchoP {
         void **tx_buf, uint16_t *tx_buf_len) {
         
         *tx_buf = tbf;
-        *tx_buf_len = 256;
+        *tx_buf_len = 1024;
         
         call Leds.led2Toggle();
         return TRUE;
@@ -98,9 +98,10 @@ module TCPEchoP {
     event void Echo.recv(void *data, uint16_t len) {
         
 #ifdef PRINTFUART_ENABLED
-        int i;
-        uint8_t *cur = data;
+        //int i;
+        //uint8_t *cur = data;
         call Leds.led0Toggle();
+        printf("RCVD data %s: \n", data);
         //printf("Echo revc [%i]: ", len);
         //for (i = 0; i < len; i++) {
         //    printf("%02x ", cur[i]);

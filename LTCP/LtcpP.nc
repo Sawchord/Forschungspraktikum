@@ -93,8 +93,9 @@ module LtcpP {
       sock = &socks[i];
       
       // if socket in time dependent state, update time
-      if (sock->state == TCP_TIME_WAIT || sock->state == TCP_ESTABLISHED_ACKPENDING) {
-        if ( ((int32_t) sock->rettim - TCP_PROCESS_TIME) > 0) {
+      if (sock->state == TCP_TIME_WAIT || sock->state == TCP_ESTABLISHED_ACKPENDING
+        || sock->state == TCP_CLOSING) {
+        if ( ((int32_t) sock->rettim - TCP_PROCESS_TIME) < 0) {
           sock->rettim = 0;
         }
         else {
@@ -117,7 +118,10 @@ module LtcpP {
           if (sock->rettim == 0) {
             if (sock->retx < TCP_N_RETRIES) {
               
+              // resend packets
               sock->retx++;
+              sock->rettim = (sock->retx+1) * TCP_RETRY_FREQ;
+              
               call Ltcp.send[i](sock->last_payload, sock->last_payload_len);
               
             }
@@ -133,7 +137,20 @@ module LtcpP {
           }
           
           break;
+        
+        case TCP_CLOSING:
           
+          if (sock->rettim == 0) {
+            
+            if (call Ltcp.sendFlagged[i](NULL, 0, TCP_FIN) != SUCCESS) {
+              DBG("error sending FIN in  CLOSE_WAIT\n");
+            }
+            sock->state = TCP_LAST_ACK;
+            
+          }
+          
+          break;
+        
         default:
           break;
                 
@@ -238,7 +255,7 @@ module LtcpP {
     option_bytes = ((tcp->offset >> 4) - 5) * 4;
     
     sock = &socks[i];
-    payload_ptr = tcp + sizeof(struct tcp_hdr) + option_bytes;
+    payload_ptr = payload + sizeof(struct tcp_hdr) + option_bytes;
     payload_len = len - (sizeof(struct tcp_hdr) + option_bytes);
     
     if (tcp->flags & TCP_SYN || tcp->flags & TCP_FIN) {
@@ -327,8 +344,6 @@ module LtcpP {
         
         if (tcp->flags & (TCP_SYN | TCP_ACK) ) {
           
-          //FIXME: set ackno accordingly
-          
           if (call Ltcp.sendFlagged[i](NULL, 0, (TCP_ACK) ) != SUCCESS) {
             DBG("error while sending ACK in handshake\n");
             break;
@@ -380,7 +395,6 @@ module LtcpP {
       case TCP_LISTEN:
         
         if (tcp->flags & TCP_SYN) {
-          
           
           memcpy(&sock->r_ep.sin6_addr.s6_addr, &(iph->ip6_src), 16);
           sock->r_ep.sin6_port = tcp->srcport;
@@ -456,15 +470,24 @@ module LtcpP {
         
         if (! (tcp->flags & TCP_FIN)) {
           
+          // go into processing state
+          sock->state = TCP_ESTABLISHED_PROCESSING;
+          
           if (payload_len > 0) {
             // signal user of the data
             signal Ltcp.recv[i](payload_ptr, payload_len);
             
           }
           
-          // FIXME:send ack
-          sock->ackno = ntohl(tcp->seqno);
-          call Ltcp.sendFlagged[i](NULL, 0, TCP_ACK);
+          // sock->ackno = ntohl(tcp->seqno) FIXME: dafuq is this???? ;
+          
+          /* If the user used send withing the recv event, the received packet gets
+           * acknowledged on the answer, if no, the packet need to be acked no
+           */
+          if (sock->state == TCP_ESTABLISHED_PROCESSING) {
+            DBG("recv did not use send, ACKing now \n");
+            call Ltcp.sendFlagged[i](NULL, 0, TCP_ACK);
+          }
           
           DBG("Data received\n");
           
@@ -500,19 +523,26 @@ module LtcpP {
           
           break;
         }
-        
+      
+      case TCP_ESTABLISHED_PROCESSING:
       default:
+        
+        DBG("Connection is to be terminated");
         
         // in ESTABLISHED state 
         if (tcp->flags & TCP_FIN) {
           
-          sock->ackno = tcp->seqno;
+          //sock->ackno = tcp->seqno;
+          sock->rettim = TCP_TIMEWAIT_TIME;
+          
           sock->state = TCP_CLOSING;
           signal Ltcp.closing[i]();
           call Ltcp.sendFlagged[i](NULL, 0, TCP_ACK);
         }
         
-        DBG("something really bad has happened\n");
+        
+        
+        //DBG("something really bad has happened\n");
         break;
     }
   }
@@ -602,7 +632,10 @@ module LtcpP {
     sock->seqno = call Random.rand32();
     
     sock->state = TCP_SYN_SENT;
+    
+    //FIXME: important??
     sock->retx = 0;
+    
     // send syn
     if (call Ltcp.sendFlagged[client](NULL, 0, (TCP_SYN)) != SUCCESS) {
       DBG("fail to send SYN during CONNECT\n");
@@ -628,7 +661,7 @@ module LtcpP {
     sock->last_payload_len = len;
     
     // check if socket is in correct state
-    if (sock->state != TCP_ESTABLISHED_NOMINAL) {
+    if (sock->state != TCP_ESTABLISHED_NOMINAL && sock->state != TCP_ESTABLISHED_PROCESSING){
       DBG("send failed: connection not in condition to send\n");
       return FAIL;
     }    
@@ -646,9 +679,25 @@ module LtcpP {
       // set socket into ACKPENDING
       sock->state = TCP_ESTABLISHED_ACKPENDING;
       
+      // set the conditions for resending
+      sock->retx = 0;
+      sock->rettim = TCP_RETRY_FREQ;
+      
       return e;
     }
-    
+    /* if the send command is called withing a recv command
+     * the other side has a pending ack
+     * this gets added to this message right away */
+    else if (sock->state == TCP_ESTABLISHED_PROCESSING) {
+      
+      e = call Ltcp.sendFlagged[client](payload, len, TCP_ACK);
+      
+      sock->state = TCP_ESTABLISHED_ACKPENDING;
+      
+      sock->retx = 0;
+      sock->rettim = TCP_RETRY_FREQ;
+      
+    }
     else {
       return FAIL;
     }
@@ -656,8 +705,7 @@ module LtcpP {
   
   
   
-  /* send stuff over the socket and specify the falgs to be set */
-  // FIXME: make it an internal call
+  /* send stuff over the socket and specify the flags to be set */
   command error_t Ltcp.sendFlagged[uint8_t client](void *payload, uint16_t len, 
                                               tcp_flag_t flags){
     struct ip6_packet pkt;
@@ -708,7 +756,7 @@ module LtcpP {
     
     tcp->offset = 0x5 << 4; // options are not implemented
     tcp->flags = flags;
-    tcp->window = 0x1; // consideration of this implementation
+    tcp->window = htons(sock->tx_buf_len); // consideration of this implementation
     tcp->chksum = 0x0; // for now
     tcp->urgent = 0x0;
     
@@ -747,7 +795,7 @@ module LtcpP {
   
   /* the TCP active close event*/
   command error_t Ltcp.close[uint8_t client]() {
-    //if (!tcplib_close(&socks[client]))
+    
     struct tcplib_sock *sock;
     sock = &socks[client];
     
@@ -770,6 +818,7 @@ module LtcpP {
         
       case TCP_ESTABLISHED_NOMINAL:
       case TCP_ESTABLISHED_ACKPENDING:
+      case TCP_ESTABLISHED_PROCESSING:
         
         if (call Ltcp.sendFlagged[client](NULL, 0 , (TCP_FIN)) != SUCCESS) {
           

@@ -51,7 +51,7 @@ module SerialTCPP {
 } implementation {
   
   struct sockaddr_in6 dest;
-  uint8_t tx[512];
+  uint8_t tx[1024];
   
   char* teststr = "Thesty stringy thingy";
   
