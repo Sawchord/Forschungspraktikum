@@ -93,15 +93,15 @@ module LtcpP {
       sock = &socks[i];
       
       // if socket in time dependent state, update time
-      if (sock->state == TCP_TIME_WAIT || sock->state == TCP_ESTABLISHED_ACKPENDING
-        || sock->state == TCP_CLOSING) {
+      //if (sock->state == TCP_TIME_WAIT || sock->state == TCP_ESTABLISHED_ACKPENDING
+      //  || sock->state == TCP_CLOSING) {
         if ( ((int32_t) sock->rettim - TCP_PROCESS_TIME) < 0) {
           sock->rettim = 0;
         }
         else {
           sock->rettim -= TCP_PROCESS_TIME;
         }
-      }
+      //}
       
       switch (sock->state) {
         case TCP_TIME_WAIT:
@@ -127,9 +127,11 @@ module LtcpP {
             }
             else {
               
-              // send fails permanen -> signal user the fail
+              // send fails permanent -> signal user the fail
               sock->retx = 0;
+              
               sock->state = TCP_ESTABLISHED_NOMINAL;
+              
               signal Ltcp.sendDone[i](FAIL);
               
             }
@@ -147,6 +149,27 @@ module LtcpP {
             }
             sock->state = TCP_LAST_ACK;
             
+          }
+          
+          break;
+        
+        case TCP_FIN_WAIT_1:
+          
+          if (sock->rettim == 0) {
+            
+            if (sock->retx < TCP_N_RETRIES) {
+              
+              sock->retx++;
+              sock->rettim = (sock->retx+1) * TCP_RETRY_FREQ;
+              
+              call Ltcp.send[i](sock->last_payload, sock->last_payload_len);
+              
+            }
+            else {
+              
+              call Ltcp.sendFlagged[i](NULL, 0, TCP_RST);
+              sock->state = TCP_CLOSED;
+            }
           }
           
           break;
@@ -259,7 +282,8 @@ module LtcpP {
     payload_len = len - (sizeof(struct tcp_hdr) + option_bytes);
     
     if (tcp->flags & TCP_SYN || tcp->flags & TCP_FIN) {
-      // if a SYN or a FIN was received, one need to set the acknowledgement number accordingly
+      /* if a SYN or a FIN was received, one need to set
+       * the acknowledgement number accordingly */
       sock->ackno += 1;
     }
     
@@ -548,8 +572,6 @@ module LtcpP {
           call Ltcp.sendFlagged[i](NULL, 0, TCP_ACK);
         }
         
-        
-        
         //DBG("something really bad has happened\n");
         break;
     }
@@ -826,6 +848,7 @@ module LtcpP {
         }
         
         sock->retx = 0;
+        sock->rettim = TCP_N_RETRIES;
         sock->state = TCP_LAST_ACK;
         
         return SUCCESS;
@@ -835,7 +858,7 @@ module LtcpP {
       case TCP_ESTABLISHED_ACKPENDING:
       case TCP_ESTABLISHED_PROCESSING:
         
-        if (call Ltcp.sendFlagged[client](NULL, 0 , (TCP_FIN)) != SUCCESS) {
+        if (call Ltcp.sendFlagged[client](NULL, 0 , (TCP_FIN | TCP_ACK)) != SUCCESS) {
           
           DBG("error sending FIN\n");
           return FAIL;

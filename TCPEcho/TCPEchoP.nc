@@ -71,6 +71,10 @@ module TCPEchoP {
   }
   
   event void RevEcho.connectDone(error_t e) {
+    if (e == SUCCESS) {
+      connected = TRUE;
+      call StatusTimer.startPeriodic(2000);
+    }
   }
     
   
@@ -110,6 +114,16 @@ module TCPEchoP {
   }
   
   event void RevEcho.sendDone(error_t e) {
+    
+    if (msgs_send == 3) {
+        if (call RevEcho.close() == SUCCESS) {
+          connected = FALSE;
+          printf("connection terminated on this side\n");
+        }
+        else {
+          call Leds.led2Toggle();
+        }
+      }
   }
   
   event void RevEcho.recv(void *data, uint16_t len) {
@@ -127,12 +141,13 @@ module TCPEchoP {
     printf("RCVD data %s: \n", data);
     
     if (connected == FALSE) {
+      msgs_send = 0;
       printf("starting reverse echo\n");
       dest.sin6_port = htons(7);
       inet_pton6("fec0::100", &(dest.sin6_addr));
       if (call RevEcho.connect(&dest, &tbf2, 128) == SUCCESS){
-        connected = TRUE;
-        call StatusTimer.startPeriodic(2000);
+        //connected = TRUE;
+        //call StatusTimer.startPeriodic(2000);
       }
     }
     
@@ -150,7 +165,7 @@ module TCPEchoP {
       
       msgs_send ++;
       
-      if (msgs_send == 3) {
+      /*if (msgs_send == 3) {
         if (call RevEcho.close() == SUCCESS) {
           connected = FALSE;
           printf("connection terminated on this side\n");
@@ -158,7 +173,7 @@ module TCPEchoP {
         else {
           call Leds.led2Toggle();
         }
-      }
+      }*/
     }
   }
 }
