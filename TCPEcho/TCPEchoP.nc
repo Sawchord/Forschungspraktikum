@@ -165,15 +165,6 @@ module TCPEchoP {
       
       msgs_send ++;
       
-      /*if (msgs_send == 3) {
-        if (call RevEcho.close() == SUCCESS) {
-          connected = FALSE;
-          printf("connection terminated on this side\n");
-        }
-        else {
-          call Leds.led2Toggle();
-        }
-      }*/
     }
   }
 }

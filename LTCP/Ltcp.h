@@ -47,7 +47,7 @@
 
 /* number of retries before giving up */
 #ifndef TCP_N_RETRIES
-#define TCP_N_RETRIES 6
+#define TCP_N_RETRIES 3
 #endif
 
 /* debug output */
