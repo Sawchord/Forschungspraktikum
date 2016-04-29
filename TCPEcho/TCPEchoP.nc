@@ -34,7 +34,11 @@ module TCPEchoP {
 } implementation {
   
   bool timerStarted;
+  bool connected = FALSE;
+  uint8_t msgs_send = 0;
   struct sockaddr_in6 dest;
+  
+  char tstr[] = "hello from revecho\n";
   
   uint8_t tbf[1024];
   uint8_t tbf2[128];
@@ -48,13 +52,6 @@ module TCPEchoP {
     call RadioControl.start();
     timerStarted = FALSE;
     
-    //call IPStats.clear();
-    
-//#ifdef REPORT_DEST
-//        route_dest.sin6_port = htons(7000);
-//        inet_pton6(REPORT_DEST, &route_dest.sin6_addr);
-//        call StatusTimer.startOneShot(call Random.rand16() % (1024 * REPORT_PERIOD));
-//#endif
       
   }
     
@@ -83,6 +80,8 @@ module TCPEchoP {
   }
   
   event void RevEcho.closed(error_t e) {
+    printf("connection closed on the other side\n");
+    connected = FALSE;
   }
   
   event void Echo.acked() {
@@ -115,25 +114,28 @@ module TCPEchoP {
   
   event void RevEcho.recv(void *data, uint16_t len) {
     printf("revecho has data: %s\n", data);
+    
+    
+    if (call Echo.send(data, len) != SUCCESS) {
+        call Leds.led1Toggle();
+    }
   }
   
   event void Echo.recv(void *data, uint16_t len) {
     
-#ifdef PRINTFUART_ENABLED
     call Leds.led0Toggle();
     printf("RCVD data %s: \n", data);
-#endif  
     
-    // testing the reverse echo
-    //if ((char) *data == '#') {
+    if (connected == FALSE) {
       printf("starting reverse echo\n");
       dest.sin6_port = htons(7);
       inet_pton6("fec0::100", &(dest.sin6_addr));
       if (call RevEcho.connect(&dest, &tbf2, 128) == SUCCESS){
+        connected = TRUE;
         call StatusTimer.startPeriodic(2000);
       }
-      
-    //}
+    }
+    
     
     if (call Echo.send(data, len) != SUCCESS) {
         call Leds.led1Toggle();
@@ -141,9 +143,25 @@ module TCPEchoP {
   }
     
   event void StatusTimer.fired() {
-    char tstr = "hello from revecho";
-    call RevEcho.send(&tstr, 100);
+    if (connected == TRUE) {
+      call RevEcho.send(&tstr, 20);
     
-    call Leds.led1Toggle();
+      call Leds.led1Toggle();
+      
+      msgs_send ++;
+      
+      if (msgs_send == 3) {
+        if (call RevEcho.close() == SUCCESS) {
+          connected = FALSE;
+          printf("connection terminated on this side\n");
+        }
+        else {
+          call Leds.led2Toggle();
+        }
+      }
+    }
   }
 }
+
+
+

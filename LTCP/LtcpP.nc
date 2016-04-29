@@ -644,7 +644,7 @@ module LtcpP {
     sock->state = TCP_SYN_SENT;
     
     //FIXME: important??
-    sock->retx = 0;
+    //sock->retx = 0;
     
     // send syn
     if (call Ltcp.sendFlagged[client](NULL, 0, (TCP_SYN)) != SUCCESS) {
@@ -653,7 +653,7 @@ module LtcpP {
     }
     
     // send SYN, need to increase sequence number afterwards
-    sock-> seqno += 1;
+    //sock-> seqno += 1;
     
     return SUCCESS;
   }
@@ -684,7 +684,7 @@ module LtcpP {
     
     if (sock->state == TCP_ESTABLISHED_NOMINAL) {
     
-      e = call Ltcp.sendFlagged[client](payload, len, 0x0);
+      e = call Ltcp.sendFlagged[client](payload, len, TCP_ACK);
       
       // set socket into ACKPENDING
       sock->state = TCP_ESTABLISHED_ACKPENDING;
@@ -711,6 +711,8 @@ module LtcpP {
     else {
       return FAIL;
     }
+    
+    return FAIL;
   }
   
   
@@ -762,6 +764,9 @@ module LtcpP {
     // only set ackno if it is an ack packet
     if (flags & TCP_ACK) {
       tcp->ackno = htonl(sock->ackno);
+    }
+    else {
+      tcp->ackno = 0x0;
     }
     
     tcp->offset = 0x5 << 4; // options are not implemented
