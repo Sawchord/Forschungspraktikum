@@ -72,6 +72,7 @@ module TCPEchoP {
   
   event void RevEcho.connectDone(error_t e) {
     if (e == SUCCESS) {
+      msgs_send = 0;
       connected = TRUE;
       call StatusTimer.startPeriodic(2000);
     }
@@ -138,16 +139,15 @@ module TCPEchoP {
   event void Echo.recv(void *data, uint16_t len) {
     
     call Leds.led0Toggle();
-    printf("RCVD data %s: \n", data);
+    printf("RCVD data: %s \n", data);
     
     if (connected == FALSE) {
       msgs_send = 0;
       printf("starting reverse echo\n");
       dest.sin6_port = htons(7);
       inet_pton6("fec0::100", &(dest.sin6_addr));
-      if (call RevEcho.connect(&dest, &tbf2, 128) == SUCCESS){
-        //connected = TRUE;
-        //call StatusTimer.startPeriodic(2000);
+      if (call RevEcho.connect(&dest, &tbf2, 128) != SUCCESS){
+        printf("revecho connection failed\n");
       }
     }
     
@@ -159,6 +159,7 @@ module TCPEchoP {
     
   event void StatusTimer.fired() {
     if (connected == TRUE) {
+      printf("sending data on revecho\n");
       call RevEcho.send(&tstr, 20);
     
       call Leds.led1Toggle();

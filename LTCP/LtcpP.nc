@@ -263,7 +263,7 @@ module LtcpP {
         return;
       }
       
-      if (socks[i].l_ep.sin6_port == tcp->dstport ) {
+      if (socks[i].l_ep.sin6_port == tcp->dstport && socks[i].state != TCP_CLOSED) {
         break;
       }
       
@@ -296,12 +296,14 @@ module LtcpP {
       case TCP_CLOSED:
         
         // closed connection dont like your presence
-        if (call Ltcp.sendFlagged[i](NULL, 0 , (TCP_RST)) != SUCCESS) {
-          
-          DBG("error sending RST on CLOSED\n");
-          return;
-        }
+        // FIXME: since the sock is not ready, this code is buggy and to be removed
+        //if (call Ltcp.sendFlagged[i](NULL, 0 , (TCP_RST)) != SUCCESS) {
+        //  DBG("error sending RST on CLOSED\n");
+        //  return;
+        //}
         
+        DBG("in TCP_CLOSED, should not be reachable\n");
+        // ignore
         break;
         
       case TCP_LAST_ACK:
@@ -367,8 +369,15 @@ module LtcpP {
         break;
         
       case TCP_SYN_SENT:
-        
-        if (tcp->flags & (TCP_SYN | TCP_ACK) ) {
+      
+        if (tcp->flags & TCP_RST) {
+          
+          DBG("received RST in SYN_SEND -> closing\n");
+          sock->state = TCP_CLOSED;
+          signal Ltcp.connectDone[i](FAIL);
+          break;
+        }
+        else if ( (tcp->flags & TCP_SYN)  && (tcp->flags & TCP_ACK) ) {
           
           sock->ackno = ntohl(tcp->seqno) + 1;
           
@@ -394,13 +403,7 @@ module LtcpP {
           break;
           
         }
-        else if (tcp->flags & TCP_RST) {
-          
-          DBG("received RST in SYN_SEND -> closing\n");
-          sock->state = TCP_CLOSED;
-          signal Ltcp.connectDone[i](FAIL);
-          break;
-        }
+        
         
         
         break;
@@ -694,7 +697,7 @@ module LtcpP {
     
     // check if socket is in correct state
     if (sock->state != TCP_ESTABLISHED_NOMINAL && sock->state != TCP_ESTABLISHED_PROCESSING){
-      DBG("send failed: connection not in condition to send\n");
+      DBG("send failed: sock %d not in condition to send\n", ntohs(sock->l_ep.sin6_port));
       return FAIL;
     }    
     
