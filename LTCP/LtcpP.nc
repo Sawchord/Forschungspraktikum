@@ -87,9 +87,11 @@ module LtcpP {
     struct tcplib_sock *sock;
     int i;
     
+    
     // check all sockets for need to update
     for (i = 0; i < uniqueCount("TCP_CLIENT"); i++) {
       
+      DBG("sock %d state:%d\n",i , socks[i].state);
       sock = &socks[i];
       
       // update time
@@ -125,12 +127,9 @@ module LtcpP {
             else {
               
               // send fails permanent -> signal user the fail
-              sock->retx = 0;
-              
+              //sock->retx = 0;
               sock->state = TCP_ESTABLISHED_NOMINAL;
-              
               signal Ltcp.sendDone[i](FAIL);
-              
             }
             
           }
@@ -189,6 +188,50 @@ module LtcpP {
   
   event void IPAddress.changed(bool valid) {}
   
+  /* got a packet from an unknown source, send reset*/
+  error_t answer_reset (struct ip6_hdr* iph, struct tcp_hdr* tcp) {
+    struct ip_iovec v1;
+    uint16_t t;
+    struct ip6_packet pkt1;
+    
+    // build a RST tcp packet
+    t = tcp->srcport;
+    tcp->srcport = tcp->dstport;
+    tcp->dstport = t;
+    
+    // set the ackno and set seqno to zero
+    tcp->ackno = htonl(ntohl(tcp->seqno) + 1);
+    tcp->seqno = 0x0;
+    tcp->offset = 0x5 << 4; // options are not implemented
+    tcp->flags = TCP_RST | TCP_ACK;
+    tcp->window = 0x0;
+    tcp->chksum = 0x0;
+    tcp->urgent = 0x0;
+    
+    // set ip fields
+    pkt1.ip6_hdr.ip6_vfc = IPV6_VERSION;
+    pkt1.ip6_hdr.ip6_nxt = IANA_TCP;
+    pkt1.ip6_hdr.ip6_plen = htons(sizeof(struct tcp_hdr));
+    
+    call IPAddress.setSource(&pkt1.ip6_hdr);
+    
+    v1.iov_base = (void* )tcp;
+    v1.iov_len = sizeof(struct tcp_hdr);
+    v1.iov_next = NULL;
+    
+    pkt1.ip6_data = &v1;
+    
+    // copy address to destination
+    memcpy(&pkt1.ip6_hdr.ip6_dst, &(iph->ip6_src), 16);
+    
+    tcp->chksum = htons(msg_cksum(&pkt1.ip6_hdr, &v1, IANA_TCP));
+    DBG("recv error: no open socket\n");
+    
+    if (call IP.send(&pkt1) != SUCCESS) {
+      DBG("error RSTING\n");
+    }
+    return SUCCESS;
+  }
   
   /* handles receiving IP packets */
   event void IP.recv(struct ip6_hdr *iph, 
@@ -217,54 +260,20 @@ module LtcpP {
     for (i = 0; i <= uniqueCount("TCP_CLIENT"); i++) {
       
       // found no port, send RST on the fly
-      
       if (i == uniqueCount("TCP_CLIENT")) {
-        //struct tcp_hdr tcp1;
-        struct ip_iovec v1;
-        uint16_t t;
-        struct ip6_packet pkt1;
-        
-        // build a RST tcp packet
-        t = tcp->srcport;
-        tcp->srcport = tcp->dstport;
-        tcp->dstport = t;
-        
-        // set the ackno and set seqno to zero
-        tcp->ackno = htonl(ntohl(tcp->seqno) + 1);
-        tcp->seqno = 0x0;
-        tcp->offset = 0x5 << 4; // options are not implemented
-        tcp->flags = TCP_RST | TCP_ACK;
-        tcp->window = 0x0;
-        tcp->chksum = 0x0;
-        tcp->urgent = 0x0;
-        
-        // set ip fields
-        pkt1.ip6_hdr.ip6_vfc = IPV6_VERSION;
-        pkt1.ip6_hdr.ip6_nxt = IANA_TCP;
-        pkt1.ip6_hdr.ip6_plen = htons(sizeof(struct tcp_hdr));
-        
-        call IPAddress.setSource(&pkt1.ip6_hdr);
-        
-        v1.iov_base = (void* )tcp;
-        v1.iov_len = sizeof(struct tcp_hdr);
-        v1.iov_next = NULL;
-        
-        pkt1.ip6_data = &v1;
-        
-        // copy address to destination
-        memcpy(&pkt1.ip6_hdr.ip6_dst, &(iph->ip6_src), 16);
-        
-        tcp->chksum = htons(msg_cksum(&pkt1.ip6_hdr, &v1, IANA_TCP));
-        DBG("recv error: no open socket\n");
-        
-        if (call IP.send(&pkt1) != SUCCESS) {
-          DBG("error RSTING\n");
-        }
+        answer_reset(iph, tcp);
         return;
       }
       
-      if (socks[i].l_ep.sin6_port == tcp->dstport && socks[i].state != TCP_CLOSED) {
-        break;
+      // legit sock found
+      if (socks[i].l_ep.sin6_port == tcp->dstport) {
+        if (socks[i].state != TCP_CLOSED) {
+          break;
+        }
+        else {
+          answer_reset(iph, tcp);
+          return;
+        }
       }
       
     }
@@ -292,15 +301,17 @@ module LtcpP {
     DBG("calculated length of payload %d \n", payload_len);
     sock->ackno += payload_len;
     
+    /* some special cases are valid in all or most of the states,
+     * these must be caught beforehand
+     */
+    // no other connection possible, while ESTABLISHED, send reset
+    if ( (tcp->flags & TCP_SYN) && !(sock->state == TCP_LISTEN || sock->state == TCP_SYN_SENT) ) {
+      answer_reset(iph, tcp);
+      return;
+    }
+    
     switch (sock->state) {
       case TCP_CLOSED:
-        
-        // closed connection dont like your presence
-        // FIXME: since the sock is not ready, this code is buggy and to be removed
-        //if (call Ltcp.sendFlagged[i](NULL, 0 , (TCP_RST)) != SUCCESS) {
-        //  DBG("error sending RST on CLOSED\n");
-        //  return;
-        //}
         
         DBG("in TCP_CLOSED, should not be reachable\n");
         // ignore
@@ -414,7 +425,6 @@ module LtcpP {
           
           DBG("connection complete\n");
           sock->state = TCP_ESTABLISHED_NOMINAL;
-          
           signal Ltcp.connectDone[i](SUCCESS);
           
           break;
@@ -495,8 +505,8 @@ module LtcpP {
       // normal usage
       case TCP_ESTABLISHED_NOMINAL:
         
-        // FIN flagged packets should fall trough
-        if (! (tcp->flags & TCP_FIN)) {
+        // FIN and flagged packets should fall trough
+        if (!(tcp->flags & TCP_FIN) && !(tcp->flags & TCP_SYN)) {
           
           // go into processing state
           sock->state = TCP_ESTABLISHED_PROCESSING;
@@ -507,8 +517,8 @@ module LtcpP {
             
           }
           
-          /* If the user used send withing the recv event, the received packet gets
-           * acknowledged on the answer, if no, the packet need to be acked no
+          /* If the user uses send withing the recv event, the received packet gets
+           * acknowledged on the answer, if not, the packet need to be acked now
            */
           if (sock->state == TCP_ESTABLISHED_PROCESSING) {
             DBG("recv did not use send, ACKing now \n");
@@ -525,7 +535,7 @@ module LtcpP {
       case TCP_ESTABLISHED_ACKPENDING:
         
         // FIN flagged packets should fall trough
-        if ( (tcp->flags & TCP_ACK) && !(tcp->flags & TCP_FIN) ) {
+        if ( (tcp->flags & TCP_ACK) && !(tcp->flags & TCP_FIN) && !(tcp->flags & TCP_SYN) ) {
           
           // sucessfull ack
           if ( ntohl(tcp->ackno) == sock->seqno) {
@@ -559,8 +569,8 @@ module LtcpP {
         
         DBG("Connection is to be terminated\n");
         
-        // some tcp imps seem to use this as ending
-        if (tcp->flags & (TCP_FIN | TCP_ACK)) {
+        // most tcp implementations seem to use this as ending
+        if ( (tcp->flags & TCP_FIN) && (tcp->flags & TCP_ACK) ) {
           
           call Ltcp.sendFlagged[i](NULL, 0, (TCP_FIN | TCP_ACK));
           
@@ -573,10 +583,10 @@ module LtcpP {
         }
         else if (tcp->flags & TCP_FIN) {
           
-          //sock->ackno = tcp->seqno;
+          sock->retx = 0;
           sock->rettim = TCP_TIMEWAIT_TIME;
           
-          sock->state = TCP_CLOSING;
+          sock->state = TCP_CLOSE_WAIT;
           call Ltcp.sendFlagged[i](NULL, 0, TCP_ACK);
         }
         

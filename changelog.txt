@@ -1,18 +1,19 @@
 LTCP changelog:
 
 FIXME:
-  Connecting on already connected Port crashes everything
-  RST packets get acknowledged in some states, leading to an infinite llop of RST->ACK messages to be exchanged
+  Weird message sent on receiving FINACK in closed state
+  Connecting on already connected port gets RST, but connection gets problems because of wrong seqno and ackno
   
 FIXED:
+  Connecting on already connected Port crashes everything
   Bugs in connect
   RST packet send at the end of the FIN sequence
   Seqno incorrect on Handshake
   
 UNCOMFIRMED:
-  Weird message sent on receiving FINACK in closed state
+  RST packets get acknowledged in some states, leading to an infinite loop of RST->ACK messages to be exchanged
   
 TODO:
   MSS in options field
   Cleanup the finish states
-  
+  SYN with payload do what?
