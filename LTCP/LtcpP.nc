@@ -92,16 +92,13 @@ module LtcpP {
       
       sock = &socks[i];
       
-      // if socket in time dependent state, update time
-      //if (sock->state == TCP_TIME_WAIT || sock->state == TCP_ESTABLISHED_ACKPENDING
-      //  || sock->state == TCP_CLOSING) {
-        if ( ((int32_t) sock->rettim - TCP_PROCESS_TIME) < 0) {
-          sock->rettim = 0;
-        }
-        else {
-          sock->rettim -= TCP_PROCESS_TIME;
-        }
-      //}
+      // update time
+      if ( ((int32_t) sock->rettim - TCP_PROCESS_TIME) < 0) {
+        sock->rettim = 0;
+      }
+      else {
+        sock->rettim -= TCP_PROCESS_TIME;
+      }
       
       switch (sock->state) {
         case TCP_TIME_WAIT:
@@ -174,6 +171,13 @@ module LtcpP {
           
           break;
         
+        case TCP_LAST_ACK:
+          if (sock->rettim == 0) {
+            sock->state = TCP_CLOSED;
+          }
+          
+          break;
+        
         default:
           break;
                 
@@ -212,8 +216,6 @@ module LtcpP {
     // check, if addressed port is on a registered socket
     for (i = 0; i <= uniqueCount("TCP_CLIENT"); i++) {
       
-      //DBG("check sock %d\n", i);
-      //DBG("port compare %d : %d\n", socks[i].l_ep.sin6_port, tcp->dstport);
       // found no port, send RST on the fly
       
       if (i == uniqueCount("TCP_CLIENT")) {
@@ -559,7 +561,10 @@ module LtcpP {
           
           call Ltcp.sendFlagged[i](NULL, 0, (TCP_FIN | TCP_ACK));
           
-          sock->state = TCP_CLOSED;
+          sock->retx = 0;
+          sock->rettim = TCP_TIMEWAIT_TIME;
+          
+          sock->state = TCP_LAST_ACK;
           signal Ltcp.closed[i](SUCCESS);
           
         }
@@ -572,7 +577,6 @@ module LtcpP {
           call Ltcp.sendFlagged[i](NULL, 0, TCP_ACK);
         }
         
-        //DBG("something really bad has happened\n");
         break;
     }
   }
@@ -617,7 +621,6 @@ module LtcpP {
     
     
     uint16_t i;
-    //uint8_t j;
     
     uint8_t port_found = 0;
     
@@ -673,9 +676,6 @@ module LtcpP {
       DBG("fail to send SYN during CONNECT\n");
       return FAIL;
     }
-    
-    // send SYN, need to increase sequence number afterwards
-    //sock-> seqno += 1;
     
     return SUCCESS;
   }
@@ -752,6 +752,10 @@ module LtcpP {
     struct tcplib_sock *sock;
     sock = &socks[client];
     
+    
+    // FIXME: check ix tx_buffer is long enough
+    // TODO: options field
+    
     // set tcp_hdr pointer accordingly
     tcp = sock->tx_buf;
     memclr(tcp, len + sizeof(struct tcp_hdr));
@@ -775,8 +779,6 @@ module LtcpP {
     // fill the source in
     call IPAddress.setSource(&pkt.ip6_hdr);
     
-    
-    // FIXME: check ix tx_buffer is long enough
     
     // set the tcp header values
     tcp->srcport = sock->l_ep.sin6_port;
@@ -865,6 +867,8 @@ module LtcpP {
         }
         
         sock->retx = 0;
+        sock->rettim = TCP_TIMEWAIT_TIME;
+        
         sock->state = TCP_FIN_WAIT_1;
         
         return SUCCESS;
