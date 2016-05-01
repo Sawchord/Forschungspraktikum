@@ -20,12 +20,46 @@
  * PROVIDE MAINTENANCE, SUPPORT, UPDATES, ENHANCEMENTS, OR MODIFICATIONS."
  * 
  */
-generic configuration LtcpSocket() {
-  provides interface Ltcp;
+#include <lib6lowpan/6lowpan.h>
+#include <Ltcp.h>
+
+configuration WebC {
+
 } implementation {
+  components MainC, LedsC;
+  components WebP;
 
-  components LtcpC;
+  WebP.Boot -> MainC;
+  WebP.Leds -> LedsC;
 
-  Ltcp = LtcpC.Ltcp[unique("TCP_CLIENT")];
+  components new TimerMilliC();
+  components IPDispatchC;
+
+  WebP.RadioControl -> IPDispatchC;
+  
+  components IPStackC;
+    
+  WebP.RadioControl -> IPStackC;
+  
+  components HttpdP;
+  components new LtcpSocket() as TcpWeb;
+  HttpdP.Boot -> MainC;
+  HttpdP.Leds -> LedsC;
+  HttpdP.Tcp -> TcpWeb;
+  
+  components RandomC;
+  WebP.Random -> RandomC;
+  
+#ifdef PRINTFUART_ENABLED
+
+  components SerialPrintfC;
+  //components PrintfC;
+  //components SerialStartC;
+#endif
+  
+  
+#ifdef RPL_ROUTING
+  components RPLRoutingC;
+#endif
   
 }

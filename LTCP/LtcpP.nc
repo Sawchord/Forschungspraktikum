@@ -282,7 +282,6 @@ module LtcpP {
     
     if (tcp->offset != (5 << 4)) {
       DBG("options not implemented, got offset of %d\n", (tcp->offset >> 4));
-    //  return FAIL;
     }
     
     // calulate the width of the option field
@@ -307,6 +306,9 @@ module LtcpP {
     // no other connection possible, while ESTABLISHED, send reset
     if ( (tcp->flags & TCP_SYN) && !(sock->state == TCP_LISTEN || sock->state == TCP_SYN_SENT) ) {
       answer_reset(iph, tcp);
+      
+      // sock increased ackno automatically on receiving SYN, need to be reseted
+      sock->ackno -= 1;
       return;
     }
     
@@ -414,8 +416,6 @@ module LtcpP {
           break;
           
         }
-        
-        
         
         break;
         

@@ -1,4 +1,4 @@
-COMPONENT=TCPEchoC
+COMPONENT=WebC
 # uncomment this for network programming support
 # BOOTLOADER=tosboot
 

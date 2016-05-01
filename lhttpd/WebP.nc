@@ -20,12 +20,32 @@
  * PROVIDE MAINTENANCE, SUPPORT, UPDATES, ENHANCEMENTS, OR MODIFICATIONS."
  * 
  */
-generic configuration LtcpSocket() {
-  provides interface Ltcp;
+ 
+ 
+ module WebP {
+  uses {
+    interface Boot;
+    interface SplitControl as RadioControl;
+
+    
+    interface Leds;
+    
+    interface Random;
+
+  }
+
 } implementation {
-
-  components LtcpC;
-
-  Ltcp = LtcpC.Ltcp[unique("TCP_CLIENT")];
+  
+  event void Boot.booted() {
+      call RadioControl.start();
+  }
+  
+  event void RadioControl.startDone(error_t e) {
+  
+  }
+  
+  event void RadioControl.stopDone(error_t e) {
+  
+  }
   
 }
