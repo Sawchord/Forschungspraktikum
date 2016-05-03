@@ -106,8 +106,9 @@ module LtcpP {
         case TCP_TIME_WAIT:
           
           if (sock->rettim == 0) {
-            sock->retx = 0;
+            //sock->retx = 0;
             sock->state = TCP_CLOSED;
+            signal Ltcp.closed[i](SUCCESS);
           }
           
           break;
@@ -158,7 +159,10 @@ module LtcpP {
               sock->retx++;
               sock->rettim = (sock->retx+1) * TCP_RETRY_FREQ;
               
-              call Ltcp.send[i](sock->last_payload, sock->last_payload_len);
+              //call Ltcp.send[i](sock->last_payload, sock->last_payload_len);
+              // resent FINACK, asuming, that the last one dind't reached the destination
+              DBG("resending FINACK");
+              call Ltcp.sendFlagged[i](NULL, 0, (TCP_FIN | TCP_ACK));
               
             }
             else {
@@ -173,6 +177,7 @@ module LtcpP {
         case TCP_LAST_ACK:
           if (sock->rettim == 0) {
             sock->state = TCP_CLOSED;
+            signal Ltcp.closed[i](SUCCESS);
           }
           
           break;

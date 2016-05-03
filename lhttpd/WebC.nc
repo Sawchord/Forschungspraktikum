@@ -32,9 +32,11 @@ configuration WebC {
   WebP.Boot -> MainC;
   WebP.Leds -> LedsC;
 
-  components new TimerMilliC();
+  components new TimerMilliC() as LedTimer;
   components IPDispatchC;
-
+  
+  WebP.LedTimer -> LedTimer;
+  
   WebP.RadioControl -> IPDispatchC;
   
   components IPStackC;
@@ -49,6 +51,8 @@ configuration WebC {
   
   components RandomC;
   WebP.Random -> RandomC;
+  
+  
   
 #ifdef PRINTFUART_ENABLED
 

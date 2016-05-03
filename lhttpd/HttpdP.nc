@@ -72,7 +72,7 @@ module HttpdP {
   event bool Tcp.accept(struct sockaddr_in6 *from, 
                             void **tx_buf, uint16_t *tx_buf_len) {
     if (http_state == S_IDLE) {
-      call Leds.led2On();
+      //call Leds.led2On();
       http_state = S_CONNECTED;
       *tx_buf = tcp_buf;
       *tx_buf_len = TBUF_SIZE;
@@ -166,7 +166,7 @@ module HttpdP {
   }
 
   event void Tcp.closed(error_t e) {
-    call Leds.led2Off();
+    //call Leds.led2Off();
 
     call Tcp.bind(80);
     http_state = S_IDLE;

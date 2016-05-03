@@ -3,9 +3,9 @@ LTCP changelog:
 FIXME:
   Weird message sent on receiving FINACK in closed state
   RST packets get acknowledged in some states, leading to an infinite loop of RST->ACK messages to be exchanged
-  Sometimes miscalculation on finack
   
 FIXED:
+  Sometimes miscalculation on finack
   Connecting on already connected Port crashes everything
   Connecting on already connected port gets RST, but connection gets problems because of wrong seqno and ackno
   Bugs in connect

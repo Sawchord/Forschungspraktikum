@@ -27,7 +27,7 @@
     interface Boot;
     interface SplitControl as RadioControl;
 
-    
+    interface Timer<TMilli> as LedTimer;
     interface Leds;
     
     interface Random;
@@ -36,8 +36,11 @@
 
 } implementation {
   
+  uint8_t tim = 0;
+  
   event void Boot.booted() {
-      call RadioControl.start();
+    call LedTimer.startPeriodic(2000);
+    call RadioControl.start();
   }
   
   event void RadioControl.startDone(error_t e) {
@@ -46,6 +49,11 @@
   
   event void RadioControl.stopDone(error_t e) {
   
+  }
+  
+  event void LedTimer.fired() {
+    tim++;
+    call Leds.set(tim);
   }
   
 }
