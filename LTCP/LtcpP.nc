@@ -294,6 +294,7 @@ module LtcpP {
     if (tcp->flags & TCP_SYN || tcp->flags & TCP_FIN) {
       /* if a SYN or a FIN was received, one need to set
        * the acknowledgement number accordingly */
+      DBG("increasing ackno because %d\n", (tcp->flags));
       sock->ackno += 1;
     }
     
@@ -308,6 +309,7 @@ module LtcpP {
       answer_reset(iph, tcp);
       
       // sock increased ackno automatically on receiving SYN, need to be reseted
+      DBG("decreasing ackno\n");
       sock->ackno -= 1;
       return;
     }
@@ -333,7 +335,7 @@ module LtcpP {
         
       case TCP_FIN_WAIT_1:
         
-        if (tcp->flags & (TCP_FIN | TCP_ACK)) {
+        if ( (tcp->flags & TCP_FIN) && (tcp->flags & TCP_ACK) ) {
           
           
           // sending ack
@@ -341,8 +343,8 @@ module LtcpP {
           DBG("error sending ACK on TCP_FIN_WAIT_1\n");
           }
           
-          DBG("going to TCP_CLOSING\n");
-          sock->state = TCP_CLOSING;
+          DBG("going to TCP_LAST_ACK\n");
+          sock->state = TCP_LAST_ACK;
           
         }
         else if (tcp->flags & TCP_FIN) {
@@ -863,7 +865,7 @@ module LtcpP {
         }
         
         sock->retx = 0;
-        sock->rettim = TCP_N_RETRIES;
+        sock->rettim = TCP_TIMEWAIT_TIME;
         sock->state = TCP_LAST_ACK;
         
         return SUCCESS;
@@ -938,12 +940,12 @@ module LtcpP {
   default event void Ltcp.sendDone[uint8_t cid](error_t e) {}
   
   /* risen, if packet is received and TCP layer preprocessing is done */
-  default event void Ltcp.recv[uint8_t cid](void *payload, uint16_t len) {  }
+  default event void Ltcp.recv[uint8_t cid](void *payload, uint16_t len) {}
   
   /* risen after Tcp connection is fully closed */
-  default event void Ltcp.closed[uint8_t cid](error_t e) { }
+  default event void Ltcp.closed[uint8_t cid](error_t e) {}
   
   /* risen after packet send was acked. cannot send another packet before this happens */
-  default event void Ltcp.acked[uint8_t cid]() { }
+  default event void Ltcp.acked[uint8_t cid]() {}
   
 }

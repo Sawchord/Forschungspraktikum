@@ -8,7 +8,7 @@
 
 
 #ifndef RBUF_SIZE
-  #define RBUF_SIZE 128
+  #define RBUF_SIZE 256
 #endif
 
 #ifndef TBUF_SIZE
@@ -24,8 +24,8 @@ module HttpdP {
   }
 } implementation {
 
-  static char *http_okay = "HTTP/1.0 200 OK\r\n\r\n";
-  static int http_okay_len = 19;
+  //static char *http_okay = "HTTP/1.0 200 OK\r\n\r\n";
+  //static int http_okay_len = 19;
 
   enum {
     S_IDLE,
@@ -41,33 +41,23 @@ module HttpdP {
     HTTP_POST,
   };
 
-  void process_request(int verb, char *request, int len) {
-    char reply[24];
-    memcpy(reply, "led0: 0 led1: 0 led2: 0\n", 24);
+  /*void process_request(int verb, char *request, int len) {
+    
+    char reply[43];
+    uint8_t bitmap;
+    memcpy(reply, "HTTP/1.1 200 OK\r\n\r\n", 19);
+    memcpy(reply+19, "led0: 0 led1: 0 led2: 0\n", 24);
 
-    //printfUART("request: '%s'\n", request);
-
-    if (len >= 10 &&
-        request[0] == '/' &&
-        request[1] == 'r' &&
-        request[2] == 'e' &&
-        request[3] == 'a' &&
-        request[4] == 'd' &&
-        request[5] == '/') {
-      if (request[6] == 'l' &&
-          request[7] == 'e' &&
-          request[8] == 'd' &&
-          request[9] == 's') {
-        uint8_t bitmap = call Leds.get();
-        call Tcp.send(http_okay, http_okay_len);
-        if (bitmap & 1) reply[6] = '1';
-        if (bitmap & 2) reply[14] = '1';
-        if (bitmap & 4) reply[22] = '1';
-        call Tcp.send(reply, 24);
-      }
-    }
+    
+    bitmap = call Leds.get();
+        //call Tcp.send(http_okay, http_okay_len);
+    if (bitmap & 1) reply[6+19] = '1';
+    if (bitmap & 2) reply[14+19] = '1';
+    if (bitmap & 4) reply[22+19] = '1';
+    call Tcp.send(reply, 24+19);
+    
     call Tcp.close();
-  }
+  }*/
 
   int http_state;
   int req_verb;
@@ -82,6 +72,7 @@ module HttpdP {
   event bool Tcp.accept(struct sockaddr_in6 *from, 
                             void **tx_buf, uint16_t *tx_buf_len) {
     if (http_state == S_IDLE) {
+      call Leds.led2On();
       http_state = S_CONNECTED;
       *tx_buf = tcp_buf;
       *tx_buf_len = TBUF_SIZE;
@@ -93,8 +84,26 @@ module HttpdP {
   event void Tcp.connectDone(error_t e) {
     
   }
+  
   event void Tcp.recv(void *payload, uint16_t len) {
-    static int crlf_pos;
+    
+    
+    char reply[43];
+    uint8_t bitmap;
+    memcpy(reply, "HTTP/1.1 200 OK\r\n\r\n", 19);
+    memcpy(reply+19, "led0: 0 led1: 0 led2: 0\n", 24);
+
+    
+    bitmap = call Leds.get();
+        //call Tcp.send(http_okay, http_okay_len);
+    if (bitmap & 1) reply[6+19] = '1';
+    if (bitmap & 2) reply[14+19] = '1';
+    if (bitmap & 4) reply[22+19] = '1';
+    call Tcp.send(reply, 24+19);
+    
+    call Tcp.close();
+    
+    /*static int crlf_pos;
     char *msg = payload;
     switch (http_state) {
     case S_CONNECTED:
@@ -153,11 +162,11 @@ module HttpdP {
       // len might be zero here... just a note.
     default:
       call Tcp.close();
-    }
+    }*/
   }
 
   event void Tcp.closed(error_t e) {
-    call Leds.led2Toggle();
+    call Leds.led2Off();
 
     call Tcp.bind(80);
     http_state = S_IDLE;
